@@ -84,6 +84,7 @@ GrocerEase provides a **personalized estimate from the shopper's own historical 
 - PostgreSQL
 - `NUMERIC` / Django `DecimalField` for money
 - Timezone-aware timestamps
+- Application time zone: `Asia/Manila`
 
 ---
 
@@ -162,7 +163,11 @@ A complete MVP user journey is:
 | Plan statuses | `ACTIVE`, `COMPLETED`, `ARCHIVED`. New plans start `ACTIVE`. |
 | Store requirement for plan | Required when a plan is created so estimates have a target context. |
 | Budget | Optional. Blank means **no budget**, not zero. |
-| Currency | One preferred display currency per user. No currency conversion in MVP. |
+| Currency | Philippine peso (PHP, `₱`) only. No currency preference, selection, or conversion in MVP. |
+| Money precision | Exact decimal arithmetic, never binary floating point. Every money amount has 2 decimal places. Line totals are rounded half-up to 2 decimal places per line; aggregates sum the rounded line totals. |
+| Quantity precision | Up to 3 decimal places (for example `0.750`). |
+| Time zone | `Asia/Manila` defines "today", calendar months, and date defaults. |
+| Archived stores | Cannot be used for a new shopping session or plan. Records that already reference a store keep it after the store is archived. |
 | Price source | User's own completed purchase history. |
 | Store estimate | Latest known unit price for the product at the selected store. |
 | Unknown price | `null` / unknown, never zero. |
@@ -192,7 +197,6 @@ Keep each shopper's stores, products, purchase history, plans, and budgets priva
 - Logout
 - Forgot/reset password
 - Profile editing
-- Preferred currency
 - Password change
 
 ### Business rules
@@ -200,7 +204,7 @@ Keep each shopper's stores, products, purchase history, plans, and budgets priva
 - Email is the MVP login identifier and must be unique.
 - Every user-owned resource is scoped to the authenticated user.
 - Client-supplied ownership IDs are never trusted.
-- Changing display currency changes formatting only; historical stored money values are not converted.
+- All money is in Philippine pesos (PHP); there is no per-user currency setting.
 
 ### Success criteria
 
@@ -257,6 +261,7 @@ Help the shopper decide what to do next rather than becoming an analytics-heavy 
 6. **Lightweight monthly spending summary**
    - Current month
    - Previous month
+   - Months are calendar months in `Asia/Manila`.
 
 ### Success criteria
 
@@ -288,6 +293,8 @@ Help the shopper decide what to do next rather than becoming an analytics-heavy 
 - Different branches can be represented separately.
 - Archived stores remain attached to historical data.
 - Archived stores do not appear in normal new-session/new-plan selectors unless explicitly restored.
+- A shopping session or plan cannot be saved against an archived store. Creating a session or plan, completing a draft, or changing a session's or plan's store requires an `ACTIVE` store; the backend rejects an archived one even if the client sends it.
+- A record that already references a store keeps that store after it is archived. Correcting a completed session or editing an existing plan does not force a store change.
 
 ### Success criteria
 
@@ -379,7 +386,7 @@ Turn a physical receipt into structured purchase history without OCR.
 - Product
 - Quantity
 - Unit price
-- Line total, authoritative formula: `quantity × unit_price`
+- Line total, authoritative formula: `quantity × unit_price`, rounded half-up to 2 decimal places
 
 ### Required interactions
 
@@ -412,7 +419,7 @@ Drafts:
 
 To complete a shopping session:
 
-- store is required;
+- store is required and must be `ACTIVE`;
 - purchase date is required;
 - receipt total must be `>= 0`;
 - at least one purchase item is required;
@@ -562,7 +569,7 @@ The UI may show supporting context such as the latest price at another store, bu
 ### Plan fields
 
 - Name; blank becomes `Untitled plan`
-- Target store; required at creation
+- Target store; required at creation; must be an `ACTIVE` store when set or changed
 - Planned date; optional
 - Budget; optional
 - Status: `ACTIVE`, `COMPLETED`, `ARCHIVED`
@@ -715,7 +722,7 @@ For every plan item:
 
 ```text
 estimated_unit_price = latest known price(product, selected store)
-estimated_line_total = quantity × estimated_unit_price
+estimated_line_total = round_half_up(quantity × estimated_unit_price, 2)
 ```
 
 When price is unknown:
@@ -883,10 +890,6 @@ Completing a plan means the shopper is done using that planning record.
 - Display name
 - Email
 
-### Preferences
-
-- Preferred currency
-
 ### Account
 
 - Change password
@@ -894,8 +897,7 @@ Completing a plan means the shopper is done using that planning record.
 
 ### Success criteria
 
-- Currency formatting updates consistently throughout the UI.
-- Changing currency does not convert historical values.
+- Money is displayed consistently in Philippine pesos (`₱`, 2 decimal places) throughout the UI.
 
 ---
 
@@ -903,7 +905,6 @@ Completing a plan means the shopper is done using that planning record.
 
 ```text
 User
- ├── UserPreference
  ├── Store
  ├── Product
  ├── ShoppingSession
@@ -925,7 +926,11 @@ Every top-level domain object belongs to one user, directly or through an owners
 
 ### Money
 
-Use decimal-safe types throughout persistence and backend calculations.
+Use decimal-safe types throughout persistence and backend calculations. Never use binary floating point for money.
+
+- Every money amount has exactly 2 decimal places.
+- Line totals (`quantity × unit_price`) are rounded half-up to 2 decimal places per line. Example: `0.5 × 0.25 = 0.125 → 0.13`.
+- Subtotals, known totals, budget-fit amounts, and spending sums add the already-rounded line totals or stored amounts.
 
 Recommended:
 
@@ -948,7 +953,7 @@ Detailed contracts live in `BACKEND.md`.
 | POST | `/api/auth/register/` | Register |
 | POST | `/api/auth/login/` | Login |
 | POST | `/api/auth/logout/` | Logout |
-| GET/PATCH | `/api/me/` | Current profile/preferences |
+| GET/PATCH | `/api/me/` | Current profile |
 | GET/POST | `/api/stores/` | List/create stores |
 | PATCH | `/api/stores/:id/` | Edit store |
 | POST | `/api/stores/:id/archive/` | Archive store |
