@@ -24,7 +24,6 @@ class User(AbstractUser):
 
     class Meta(AbstractUser.Meta):
         constraints = [
-            models.UniqueConstraint(Lower('email'), name='accounts_user_email_ci_uniq'),
             models.CheckConstraint(
                 condition=models.Q(email=Lower('email')),
                 name='accounts_user_email_lowercase',
@@ -48,17 +47,6 @@ class User(AbstractUser):
 
     def get_short_name(self):
         return self.display_name
-
-
-class AuthThrottleCacheEntry(models.Model):
-    """Shared Django database-cache rows used by auth throttles."""
-
-    cache_key = models.CharField(max_length=255, primary_key=True)
-    value = models.TextField()
-    expires = models.DateTimeField(db_index=True)
-
-    class Meta:
-        db_table = 'grocerease_auth_throttle_cache'
 
 
 class PasswordResetEmailJob(models.Model):

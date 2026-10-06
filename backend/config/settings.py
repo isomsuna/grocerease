@@ -99,6 +99,16 @@ def parse_num_proxies(value: str) -> int:
     return num_proxies
 
 
+def configured_num_proxies(value: str | None, *, debug: bool) -> int:
+    if value is None:
+        if not debug:
+            raise ImproperlyConfigured(
+                'DJANGO_NUM_PROXIES must be explicitly set when DJANGO_DEBUG is false.'
+            )
+        value = '0'
+    return parse_num_proxies(value)
+
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'accounts.authentication.SessionAuthenticationWith401',
@@ -115,7 +125,7 @@ REST_FRAMEWORK = {
         'password_reset': '3/hour',
         'sensitive_account_change': '5/minute',
     },
-    'NUM_PROXIES': parse_num_proxies(os.getenv('DJANGO_NUM_PROXIES', '0')),
+    'NUM_PROXIES': configured_num_proxies(os.getenv('DJANGO_NUM_PROXIES'), debug=DEBUG),
 }
 
 CACHES = {

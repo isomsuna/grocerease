@@ -1,8 +1,11 @@
+import logging
 import time
 
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts.services import process_password_reset_email_jobs
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -22,7 +25,15 @@ class Command(BaseCommand):
             raise CommandError('--poll-interval must be greater than zero.')
 
         while True:
-            processed = process_password_reset_email_jobs(batch_size=batch_size)
+            try:
+                processed = process_password_reset_email_jobs(batch_size=batch_size)
+            except Exception:
+                logger.exception('Password reset email worker iteration failed.')
+                if options['once']:
+                    self.stderr.write('Password reset email batch failed.')
+                    return
+                time.sleep(poll_interval)
+                continue
             if options['once']:
                 self.stdout.write(f'Processed {processed} password-reset email job(s).')
                 return

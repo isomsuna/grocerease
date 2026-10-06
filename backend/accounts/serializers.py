@@ -55,6 +55,9 @@ class PasswordChangeSerializer(serializers.Serializer):
 
 
 class ProfileSerializer(serializers.ModelSerializer):
+    # Check uniqueness in validate() after the current-password check so the
+    # response cannot reveal that another account owns a submitted address.
+    email = serializers.EmailField(validators=[])
     current_password = serializers.CharField(
         write_only=True,
         required=False,
@@ -66,12 +69,6 @@ class ProfileSerializer(serializers.ModelSerializer):
         fields = ('id', 'display_name', 'email', 'current_password')
         read_only_fields = ('id',)
 
-    def validate_email(self, value):
-        users = User.objects.filter(email__iexact=value).exclude(pk=self.instance.pk)
-        if users.exists():
-            raise serializers.ValidationError('An account with this email already exists.')
-        return value
-
     def validate(self, attrs):
         email = attrs.get('email', self.instance.email)
         if email.strip().lower() != self.instance.email:
@@ -79,6 +76,11 @@ class ProfileSerializer(serializers.ModelSerializer):
             if not current_password or not self.instance.check_password(current_password):
                 raise serializers.ValidationError({
                     'current_password': ['Current password is incorrect.'],
+                })
+            users = User.objects.filter(email__iexact=email).exclude(pk=self.instance.pk)
+            if users.exists():
+                raise serializers.ValidationError({
+                    'email': ['Unable to change the email to the supplied address.'],
                 })
         return attrs
 

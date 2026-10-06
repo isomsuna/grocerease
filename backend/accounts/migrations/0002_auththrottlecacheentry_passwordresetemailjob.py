@@ -6,6 +6,21 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def create_auth_throttle_cache_table(apps, schema_editor):
+    from django.core.management import call_command
+
+    table_name = 'grocerease_auth_throttle_cache'
+    connection = schema_editor.connection
+    if table_name in connection.introspection.table_names():
+        return
+    call_command(
+        'createcachetable',
+        table_name,
+        database=connection.alias,
+        verbosity=0,
+    )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -13,17 +28,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='AuthThrottleCacheEntry',
-            fields=[
-                ('cache_key', models.CharField(max_length=255, primary_key=True, serialize=False)),
-                ('value', models.TextField()),
-                ('expires', models.DateTimeField(db_index=True)),
-            ],
-            options={
-                'db_table': 'grocerease_auth_throttle_cache',
-            },
-        ),
         migrations.CreateModel(
             name='PasswordResetEmailJob',
             fields=[
@@ -39,5 +43,9 @@ class Migration(migrations.Migration):
                 'indexes': [models.Index(fields=['status', 'available_at', 'created_at'], name='accounts_reset_job_queue_idx')],
                 'constraints': [models.UniqueConstraint(condition=models.Q(('status__in', ('QUEUED', 'PROCESSING'))), fields=('user',), name='accounts_one_active_reset_email_per_user')],
             },
+        ),
+        migrations.RunPython(
+            create_auth_throttle_cache_table,
+            reverse_code=migrations.RunPython.noop,
         ),
     ]

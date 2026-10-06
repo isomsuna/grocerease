@@ -17,7 +17,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from accounts.models import PasswordResetEmailJob, User
-from accounts.services import process_password_reset_email_jobs
+from accounts.services import process_password_reset_email_jobs, register_user
 from config.settings import validate_frontend_password_reset_url
 
 
@@ -37,6 +37,7 @@ class AuthenticationConfigurationTests(SimpleTestCase):
 
     def test_proxy_and_csrf_origins_are_configurable_from_environment(self):
         from config.settings import (
+            configured_num_proxies,
             default_email_backend,
             parse_csrf_trusted_origins,
             parse_num_proxies,
@@ -49,6 +50,10 @@ class AuthenticationConfigurationTests(SimpleTestCase):
         )
         self.assertIsNone(parse_secure_proxy_ssl_header('false'))
         self.assertEqual(parse_num_proxies('2'), 2)
+        self.assertEqual(configured_num_proxies(None, debug=True), 0)
+        with self.assertRaises(ImproperlyConfigured):
+            configured_num_proxies(None, debug=False)
+        self.assertEqual(configured_num_proxies('2', debug=False), 2)
         with self.assertRaises(ImproperlyConfigured):
             parse_num_proxies('-1')
         self.assertEqual(
@@ -85,7 +90,7 @@ class AuthenticationConfigurationTests(SimpleTestCase):
             settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['sensitive_account_change'],
             '5/minute',
         )
-        self.assertEqual(settings.REST_FRAMEWORK['NUM_PROXIES'], 0)
+        self.assertGreaterEqual(settings.REST_FRAMEWORK['NUM_PROXIES'], 0)
         self.assertEqual(settings.CACHES['default']['BACKEND'], 'django.core.cache.backends.db.DatabaseCache')
         self.assertEqual(settings.CACHES['default']['LOCATION'], 'grocerease_auth_throttle_cache')
         self.assertGreater(settings.EMAIL_TIMEOUT, 0)
@@ -94,12 +99,7 @@ class AuthenticationConfigurationTests(SimpleTestCase):
 class UserIdentityTests(TestCase):
     def test_email_is_the_unique_login_identifier(self):
         self.assertEqual(User.USERNAME_FIELD, 'email')
-        self.assertTrue(
-            any(
-                constraint.name == 'accounts_user_email_ci_uniq'
-                for constraint in User._meta.constraints
-            )
-        )
+        self.assertTrue(User._meta.get_field('email').unique)
         self.assertNotIn('username', {field.name for field in User._meta.fields})
 
     def test_user_can_be_created_with_email_without_username(self):
@@ -235,6 +235,11 @@ class UserIdentityTests(TestCase):
                 display_name='Another Alex',
             )
 
+    def test_email_case_insensitivity_uses_existing_lowercase_and_unique_constraints(self):
+        constraint_names = {constraint.name for constraint in User._meta.constraints}
+        self.assertIn('accounts_user_email_lowercase', constraint_names)
+        self.assertNotIn('accounts_user_email_ci_uniq', constraint_names)
+
 
 class AuthenticationApiTests(TestCase):
     password = 'swordfish-Harbor-732!'
@@ -334,6 +339,13 @@ class AuthenticationApiTests(TestCase):
             'email': ['Unable to create an account with the supplied details.'],
         })
         self.assertEqual(User.objects.count(), 1)
+
+    def test_registration_does_not_translate_unrelated_integrity_errors(self):
+        with patch('accounts.services.User.objects.create_user', side_effect=IntegrityError('database failure')):
+            with self.assertRaises(IntegrityError):
+                register_user(
+                    email='alex@example.com', display_name='Alex', password=self.password
+                )
 
     def test_registration_is_rate_limited(self):
         responses = [
@@ -442,6 +454,47 @@ class AuthenticationApiTests(TestCase):
         self.assertIn('current_password', response.json())
         self.assertEqual(User.objects.get().email, 'alex@example.com')
 
+    def test_email_change_does_not_disclose_registered_email_before_password_check(self):
+        self.register()
+        User.objects.create_user(
+            email='taken@example.com', password=self.password, display_name='Other'
+        )
+
+        for data in (
+            {'email': 'taken@example.com'},
+            {'email': 'taken@example.com', 'current_password': 'wrong-password'},
+        ):
+            response = self.request_json('patch', '/api/me/', data)
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(set(response.json()), {'current_password'})
+            self.assertNotIn('already exists', response.content.decode().lower())
+
+        response = self.request_json('patch', '/api/me/', {
+            'email': 'taken@example.com', 'current_password': self.password,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {
+            'email': ['Unable to change the email to the supplied address.'],
+        })
+        self.assertNotIn('already exists', response.content.decode().lower())
+        self.assertEqual(User.objects.get(email='alex@example.com').email, 'alex@example.com')
+
+    def test_email_change_uniqueness_race_uses_the_same_generic_error(self):
+        self.register()
+        User.objects.create_user(
+            email='taken@example.com', password=self.password, display_name='Other'
+        )
+
+        with patch('accounts.serializers.ProfileSerializer.save', side_effect=IntegrityError):
+            response = self.request_json('patch', '/api/me/', {
+                'email': 'taken@example.com', 'current_password': self.password,
+            })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {
+            'email': ['Unable to change the email to the supplied address.'],
+        })
+
     def test_display_name_change_does_not_require_current_password(self):
         self.register()
 
@@ -474,6 +527,12 @@ class AuthenticationApiTests(TestCase):
         response = self.client.get('/api/me/')
 
         self.assertEqual(response.status_code, 401)
+
+    def test_database_cache_table_is_created_by_migration_not_a_fake_model(self):
+        from django.db import connection
+
+        self.assertIn('grocerease_auth_throttle_cache', connection.introspection.table_names())
+        self.assertFalse(any(model.__name__ == 'AuthThrottleCacheEntry' for model in User._meta.apps.get_models()))
 
     def test_session_authenticated_profile_mutation_requires_csrf(self):
         self.register()
@@ -603,6 +662,71 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
             for field in PasswordResetEmailJob._meta.fields
         ))
 
+    def test_password_reset_skips_accounts_with_unusable_passwords(self):
+        user = User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        user.set_unusable_password()
+        user.save(update_fields=('password',))
+
+        response = self.start_reset('alex@example.com')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+        self.assertEqual(self.deliver_queued_reset_emails(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_password_reset_delivery_discards_job_if_password_becomes_unusable(self):
+        user = User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        PasswordResetEmailJob.objects.create(user=user)
+        user.set_unusable_password()
+        user.save(update_fields=('password',))
+
+        self.assertEqual(self.deliver_queued_reset_emails(), 1)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_reset_request_pulls_delayed_queued_email_job_forward(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+        job = PasswordResetEmailJob.objects.get()
+        job.available_at = timezone.now() + timedelta(hours=1)
+        job.save(update_fields=('available_at',))
+
+        self.start_reset('alex@example.com')
+
+        job.refresh_from_db()
+        self.assertLessEqual(job.available_at, timezone.now())
+
+    def test_password_change_removes_pending_reset_email_job(self):
+        self.register()
+        self.start_reset('alex@example.com')
+
+        response = self.request_json('post', '/api/auth/password-change/', {
+            'current_password': self.password, 'new_password': self.new_password,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+
+    def test_password_reset_confirmation_removes_another_pending_reset_email_job(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+        self.deliver_queued_reset_emails()
+        uid, token = self.reset_uid_and_token()
+        self.start_reset('alex@example.com')
+
+        response = self.confirm_reset(uid, token)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+
     def test_password_reset_job_retries_after_transient_delivery_failure(self):
         User.objects.create_user(
             email='alex@example.com', password=self.password, display_name='Alex'
@@ -646,6 +770,40 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
 
         self.assertFalse(PasswordResetEmailJob.objects.exists())
         self.assertEqual(len(mail.outbox), 1)
+
+    def test_reset_email_worker_keeps_polling_after_unexpected_batch_error(self):
+        with patch(
+            'accounts.management.commands.send_password_reset_emails.process_password_reset_email_jobs',
+            side_effect=[OSError('temporary storage issue'), 1, 0],
+        ) as process, patch(
+            'accounts.management.commands.send_password_reset_emails.time.sleep',
+            side_effect=[None, KeyboardInterrupt],
+        ) as sleep, self.assertLogs(
+            'accounts.management.commands.send_password_reset_emails', level='ERROR'
+        ) as worker_logs:
+            with self.assertRaises(KeyboardInterrupt):
+                call_command('send_password_reset_emails', '--poll-interval', '0.1')
+
+        self.assertEqual(process.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertIn('Password reset email worker iteration failed.', '\n'.join(worker_logs.output))
+        self.assertNotIn('token=', '\n'.join(worker_logs.output))
+
+    def test_deleted_reset_job_during_failed_delivery_does_not_crash_worker(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+
+        def delete_then_fail(**_kwargs):
+            PasswordResetEmailJob.objects.all().delete()
+            raise OSError('temporary delivery failure')
+
+        with patch('accounts.services.send_mail', side_effect=delete_then_fail):
+            processed = self.deliver_queued_reset_emails()
+
+        self.assertEqual(processed, 1)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
 
     @override_settings(
         FRONTEND_PASSWORD_RESET_URL='https://app.example/reset-password?lang=en&source=email'

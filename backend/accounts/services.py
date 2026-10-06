@@ -34,7 +34,9 @@ def register_user(*, email: str, display_name: str, password: str) -> User:
                 password=password,
             )
     except IntegrityError as exc:
-        raise EmailAlreadyRegistered from exc
+        if User.objects.filter(email__iexact=email.strip()).exists():
+            raise EmailAlreadyRegistered from exc
+        raise
 
 
 def authenticate_user(*, email: str, password: str) -> User | None:
@@ -51,10 +53,13 @@ def password_validation_errors(password: str, user: User) -> list[str]:
 
 def send_password_reset(*, email: str) -> None:
     user = User.objects.filter(email__iexact=email.strip()).first()
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or not user.has_usable_password():
         return
 
-    PasswordResetEmailJob.objects.get_or_create(user=user)
+    job, _created = PasswordResetEmailJob.objects.get_or_create(user=user)
+    if job.status == PasswordResetEmailJob.Status.QUEUED and job.available_at > timezone.now():
+        job.available_at = timezone.now()
+        job.save(update_fields=('available_at',))
 
 
 def _password_reset_link(user: User) -> tuple[str, str, str]:
@@ -121,7 +126,7 @@ def _deliver_password_reset_email_job(job_id: int) -> None:
     except PasswordResetEmailJob.DoesNotExist:
         return
 
-    if not job.user.is_active:
+    if not job.user.is_active or not job.user.has_usable_password():
         job.delete()
         return
 
@@ -138,7 +143,10 @@ def _deliver_password_reset_email_job(job_id: int) -> None:
             raise OSError('Email backend did not send the reset message.')
     except Exception as exc:
         _log_password_reset_email_failure(exc, link, uid, token)
-        job.refresh_from_db()
+        try:
+            job.refresh_from_db()
+        except PasswordResetEmailJob.DoesNotExist:
+            return
         _retry_or_discard_password_reset_email(job)
     else:
         job.delete()
@@ -181,8 +189,10 @@ def reset_password(*, uid: str, token: str, new_password: str) -> tuple[User | N
     if errors:
         return user, errors
 
-    user.set_password(new_password)
-    user.save(update_fields=('password',))
+    with transaction.atomic():
+        user.set_password(new_password)
+        user.save(update_fields=('password',))
+        PasswordResetEmailJob.objects.filter(user=user).delete()
     return user, []
 
 
@@ -193,6 +203,8 @@ def change_password(*, user: User, current_password: str, new_password: str) -> 
     if errors:
         return True, errors
 
-    user.set_password(new_password)
-    user.save(update_fields=('password',))
+    with transaction.atomic():
+        user.set_password(new_password)
+        user.save(update_fields=('password',))
+        PasswordResetEmailJob.objects.filter(user=user).delete()
     return True, []

@@ -1,4 +1,4 @@
-from django.contrib.auth import login, logout, update_session_auth_hash
+from django.contrib.auth import get_user_model, login, logout, update_session_auth_hash
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.utils.decorators import method_decorator
@@ -27,6 +27,8 @@ from accounts.services import (
     send_password_reset,
 )
 from accounts.throttles import UserScopedRateThrottle
+
+User = get_user_model()
 
 
 @require_GET
@@ -157,8 +159,13 @@ class CurrentUserView(APIView):
             with transaction.atomic():
                 serializer.save()
         except IntegrityError:
-            return Response(
-                {'email': ['An account with this email already exists.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            email = serializer.validated_data.get('email')
+            if email and User.objects.filter(
+                email__iexact=email,
+            ).exclude(pk=request.user.pk).exists():
+                return Response(
+                    {'email': ['Unable to change the email to the supplied address.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            raise
         return Response(SafeUserSerializer(request.user).data)
