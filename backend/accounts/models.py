@@ -28,9 +28,16 @@ class User(AbstractUser):
             ),
         ]
 
-    def save(self, *args, **kwargs):
+    def _normalize_email(self):
         if self.email:
             self.email = self.email.strip().lower()
+
+    def clean(self):
+        super().clean()
+        self._normalize_email()
+
+    def save(self, *args, **kwargs):
+        self._normalize_email()
         return super().save(*args, **kwargs)
 
     def get_full_name(self):

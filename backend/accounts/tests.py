@@ -55,6 +55,13 @@ class UserIdentityTests(TestCase):
         self.assertEqual(user.email, 'alex@gmail.com')
         self.assertEqual(User.objects.get(pk=user.pk).email, 'alex@gmail.com')
 
+    def test_full_clean_normalizes_email_before_constraint_validation(self):
+        user = User(email='Alex@Example.com', display_name='Alex')
+
+        user.full_clean(exclude=('password',))
+
+        self.assertEqual(user.email, 'alex@example.com')
+
     def test_database_rejects_mixed_case_email_written_without_model_save(self):
         user = User.objects.create_user(
             email='alex@example.com',
