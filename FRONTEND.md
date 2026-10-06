@@ -52,7 +52,7 @@ The frontend may calculate temporary previews such as line totals while the user
 - React Hook Form
 - Zod or equivalent client schema validation
 - Accessible primitives such as Radix/shadcn or equivalent
-- Decimal-safe library/helper for client preview calculations when needed
+- Decimal-safe library/helper for client preview calculations (no binary floating point for money; see §5.3)
 
 ### Suggested structure
 
@@ -256,9 +256,11 @@ Recoverable failures should not erase unsaved local form state.
 
 ## 5.3 Money display
 
-Use the authenticated user's configured currency.
+All money is in Philippine pesos (PHP). There is no currency preference or selector. Display `₱` with thousands separators and exactly 2 decimal places.
 
-Example PHP formatting:
+Client previews use decimal-safe arithmetic, not binary floating point, and follow the backend rounding rule: each line total is rounded half-up to 2 decimal places, then rounded line totals are summed. Example: `0.5 × ₱0.25 = ₱0.13`.
+
+Example formatting:
 
 ```text
 ₱95.00
@@ -269,7 +271,7 @@ Budget input may be blank. Blank means **no budget**; never coerce blank to zero
 
 ## 5.4 Quantity display
 
-Support integer and decimal values up to the backend-supported precision.
+Support integer and decimal values up to 3 decimal places.
 
 Examples:
 
@@ -296,6 +298,13 @@ Minimum:
 - dialogs trap focus and restore it on close;
 - screen-reader-friendly loading and error messages.
 
+## 5.6 Dates and time zone
+
+GrocerEase uses the `Asia/Manila` time zone.
+
+- "Today" (for example a default purchase date) and calendar-month labels follow Manila time, not the browser's time zone.
+- Date-only API fields such as `purchase_date` and `planned_date` are calendar dates; render them without time-zone shifting.
+
 ---
 
 # 6. Feature Specifications
@@ -315,7 +324,6 @@ Minimum:
 - Email
 - Password
 - Confirm password
-- Preferred currency
 
 ### Login fields
 
@@ -484,6 +492,7 @@ Inline create behavior:
 
 - Missing store never forces user to abandon receipt or planner input.
 - Archived store is not shown in normal selectors unless current historical record already references it.
+- A new shopping session or plan cannot use an archived store. If the backend rejects a store because it is archived, show the error on the store field and preserve the rest of the form.
 
 ---
 
@@ -609,7 +618,7 @@ Edit:
 ### Preview formulas
 
 ```text
-line_total_preview = quantity × unit_price
+line_total_preview = round_half_up(quantity × unit_price, 2)
 items_subtotal_preview = Σ line_total_preview
 difference_preview = receipt_total - items_subtotal_preview
 ```
@@ -864,7 +873,7 @@ Previous session mode:
 
 - show recent completed sessions;
 - select exactly one;
-- default store to source session store.
+- default store to source session store; if that store is archived, leave the store unselected and require the user to choose an active store (or add one inline).
 
 Frequent products mode:
 
@@ -1275,10 +1284,6 @@ Profile:
 - Display name
 - Email
 
-Preferences:
-
-- Preferred currency
-
 Account:
 
 - Change password
@@ -1286,7 +1291,6 @@ Account:
 
 ### Success criteria
 
-- Currency change refreshes money formatting throughout app.
 - Logout clears private query cache.
 
 ---
@@ -1323,7 +1327,7 @@ Stories are implementation-oriented and may be used directly as backlog tickets.
 
 **Acceptance criteria:**
 
-- Registration includes display name, email, password, confirm password, currency.
+- Registration includes display name, email, password, confirm password.
 - Client catches empty/invalid email and password mismatch.
 - Backend validation errors render clearly.
 - Successful registration routes to authenticated application.

@@ -64,7 +64,7 @@ Suggested ownership:
 ```text
 accounts/
   auth
-  profile/preferences
+  profile
 
 stores/
   store CRUD/archive/restore
@@ -172,10 +172,28 @@ quantity       NUMERIC(10,3)
 
 Never use binary floating point for authoritative monetary calculations.
 
+All money is in Philippine pesos (PHP). There is no currency field or conversion.
+
+### Precision and rounding
+
+- Every money amount has exactly 2 decimal places.
+- Quantity allows up to 3 decimal places.
+- Products of quantity and price are rounded to 2 decimal places with `ROUND_HALF_UP`, per line, before any aggregation.
+- Aggregates (items subtotal, known total, budget-fit totals, remaining, over-by, spending) are sums/differences of already-rounded 2-decimal amounts.
+
+Examples:
+
+```text
+0.10 + 0.20          = 0.30
+1.5 × 95.25 = 142.875 → 142.88
+0.5 × 0.25  = 0.125   → 0.13
+3 lines of 0.5 × 0.25 → 0.13 + 0.13 + 0.13 = 0.39
+```
+
 ### Authoritative line total
 
 ```text
-line_total = quantity × unit_price
+line_total = round_half_up(quantity × unit_price, 2)
 ```
 
 Never trust a client-submitted line total as final.
@@ -186,7 +204,9 @@ Never trust a client-submitted line total as final.
 
 - `created_at`, `updated_at` on primary models.
 - `completed_at` where relevant.
-- Timezone-aware datetimes.
+- Timezone-aware datetimes (`USE_TZ = True`).
+- Application time zone is `Asia/Manila` (`TIME_ZONE = 'Asia/Manila'`).
+- "Today" and calendar-month boundaries (for example monthly spending) are evaluated in `Asia/Manila`, e.g. via `django.utils.timezone.localdate()`.
 - `purchase_date` and `planned_date` are date fields.
 
 ---
@@ -248,22 +268,20 @@ Use stable deterministic ordering.
 
 # 4. Domain Models
 
-## 4.1 UserPreference
+## 4.1 User Profile
+
+The custom Django user model holds the profile fields. No separate preference model is required for MVP.
 
 ```text
 id
-user_id          OneToOne -> User
-currency_code    varchar, default PHP unless product configuration says otherwise
-created_at
-updated_at
+email            unique, login identifier
+display_name
 ```
-
-Display name may live on the Django user model or preference/profile model, but API should expose one canonical `display_name`.
 
 ### Rules
 
-- Exactly one preference record per user.
-- Currency changes affect formatting preference only; no stored monetary conversion.
+- API exposes one canonical `display_name`.
+- There is no per-user currency setting; all money is PHP.
 
 ---
 
@@ -285,6 +303,8 @@ updated_at
 - Store belongs to one user.
 - Archived stores remain valid references for historical sessions/plans.
 - Normal selectors query only ACTIVE stores.
+- An archived store cannot be assigned to a new record. Creating a shopping session or plan, completing a draft session, or changing a session's or plan's `store_id` requires an ACTIVE owned store; otherwise return a `400` field error on `store_id`.
+- A record that already references a store keeps it after the store is archived. Updates that leave `store_id` unchanged are not rejected because the store is archived.
 - Exact duplicate store name/branch may produce a warning, but need not be hard-blocked because legitimate duplicate labels are possible.
 
 Recommended indexes:
@@ -388,7 +408,7 @@ Drafts do not participate in:
 
 A COMPLETED session requires:
 
-- owned active or historical store;
+- owned store, which must be ACTIVE when the session is created as completed, when a draft is completed, or when its store is changed (see §4.2); a correction that keeps the existing store is allowed even if that store has since been archived;
 - purchase date;
 - receipt total `>= 0`;
 - at least one valid PurchaseItem;
@@ -460,6 +480,7 @@ completed_at      nullable
 ### Rules
 
 - Store belongs to user.
+- Store must be ACTIVE when the plan is created or its store is changed (see §4.2).
 - New plan starts ACTIVE.
 - Blank/empty name becomes `Untitled plan` server-side.
 - `budget = null` means no budget.
@@ -507,7 +528,7 @@ Duplicate add attempts should return a clear conflict containing the existing it
 
 # 5. Feature/API Specifications
 
-## 5.1 Current User & Preferences
+## 5.1 Current User
 
 ### Endpoints
 
@@ -522,15 +543,13 @@ Response should include at minimum:
 {
   "id": "...",
   "display_name": "Alex",
-  "email": "alex@example.com",
-  "currency_code": "PHP"
+  "email": "alex@example.com"
 }
 ```
 
 ### Rules
 
 - Email uniqueness enforced when changed.
-- Currency validation uses supported currency codes.
 
 ---
 
@@ -699,7 +718,7 @@ POST /api/shopping-sessions/:id/complete/
 ### Process
 
 1. Lock/resolve owned draft.
-2. Validate store/date/receipt total/items.
+2. Validate store (owned and ACTIVE)/date/receipt total/items.
 3. Recalculate line totals.
 4. Set `status=COMPLETED`.
 5. Set `completed_at=now()`.
@@ -890,7 +909,7 @@ page=<n>
 
 ### Create validation
 
-- Store is required and owned.
+- Store is required, owned, and ACTIVE.
 - Budget nullable; if provided `>= 0`.
 - Name normalized; blank → `Untitled plan`.
 - Status is server-controlled and starts ACTIVE.
@@ -1019,6 +1038,7 @@ POST /api/plans/from-session/:session_id/
 
 - Create ACTIVE plan.
 - Default store to source session store unless valid override provided.
+- If the source session's store is archived, an ACTIVE `store_id` override is required; without one, return a `400` field error on `store_id`.
 - Copy product references and quantities.
 - Set item priority default `OPTIONAL` unless product decision changes later.
 - Preserve source item order if available; otherwise stable order.
@@ -1105,7 +1125,7 @@ For each plan item:
 
 ```text
 estimated_unit_price = historical unit price
-estimated_line_total = quantity × unit price
+estimated_line_total = round_half_up(quantity × unit price, 2)
 ```
 
 3. If unknown:
@@ -1326,6 +1346,8 @@ AND purchase_date in month
 ```
 
 Use receipt total, not reconstructed item subtotal.
+
+Current and previous month are calendar months determined from today's date in `Asia/Manila`.
 
 ### Performance
 
@@ -1718,7 +1740,7 @@ Use appropriate transaction/locking if concurrent completion requests could othe
 
 **Acceptance criteria:**
 
-- PATCH validates owned store.
+- When PATCH sets or changes `store_id`, it validates that the store is owned and ACTIVE. A PATCH that leaves `store_id` unchanged is not rejected because the existing store has since been archived (see §4.2).
 - Next estimate uses only new store history.
 - Purchase history remains untouched.
 
@@ -1803,7 +1825,7 @@ Use appropriate transaction/locking if concurrent completion requests could othe
 | POST | `/api/auth/password-reset/` | Start reset |
 | POST | `/api/auth/password-reset/confirm/` | Confirm reset |
 | POST | `/api/auth/password-change/` | Change password |
-| GET/PATCH | `/api/me/` | Current profile/preferences |
+| GET/PATCH | `/api/me/` | Current profile |
 | GET/POST | `/api/stores/` | List/create stores |
 | GET/PATCH | `/api/stores/:id/` | Store detail/edit |
 | POST | `/api/stores/:id/archive/` | Archive store |
@@ -1845,6 +1867,7 @@ No plan-duplicate endpoint exists in MVP.
 ## Stores/products
 
 - Archive/restore.
+- Archived store rejected for new session/plan, draft completion, and store change; existing references kept.
 - Product normalized-name uniqueness.
 - Search/category filters.
 
@@ -1854,7 +1877,7 @@ No plan-duplicate endpoint exists in MVP.
 - Complete valid draft.
 - Reject invalid completed session.
 - Atomic session/items write.
-- Authoritative line totals.
+- Authoritative line totals, rounded half-up to 2 decimal places.
 - Receipt mismatch allowed.
 - Unique product per session.
 - Correct completed session.
@@ -1917,7 +1940,7 @@ No plan-duplicate endpoint exists in MVP.
 
 - Latest active plan selection.
 - Latest completed session.
-- Current/previous month receipt-total sums.
+- Current/previous month receipt-total sums, with month boundaries in `Asia/Manila`.
 - Empty user response.
 
 ---
@@ -1965,7 +1988,7 @@ Typical non-heavy API requests should aim for p95 around `< 500 ms` under normal
 
 Backend MVP is done when:
 
-- authentication and user preferences work securely;
+- authentication and user profile work securely;
 - store archive/restore and product normalized uniqueness work;
 - session drafts can be incomplete without polluting historical calculations;
 - completed sessions validate and persist atomically;
