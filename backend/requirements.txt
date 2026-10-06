@@ -1,4 +1,4 @@
-Django>=5.2.8,<5.3
+Django>=6.1.1,<6.2
 psycopg[binary]>=3.3.6,<4
 djangorestframework>=3.18.1,<4
 python-dotenv>=1.2.4,<2
