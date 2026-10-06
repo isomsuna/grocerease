@@ -7,7 +7,7 @@ import { FormAlert } from '../../../components/ui/FormAlert'
 import { TextField } from '../../../components/ui/TextField'
 import { applyApiErrors } from '../../../lib/api/errors'
 import { AuthCard } from '../components/AuthCard'
-import { SessionNotEstablishedError, useRegister } from '../hooks'
+import { SessionCheckFailedError, SessionNotEstablishedError, useRegister } from '../hooks'
 import { registerSchema, type RegisterValues } from '../schemas'
 
 export default function RegisterPage() {
@@ -31,7 +31,12 @@ export default function RegisterPage() {
     try {
       await registerAccount.mutateAsync({ display_name, email, password })
     } catch (error) {
-      if (error instanceof SessionNotEstablishedError) {
+      // The account exists now, so resubmitting would only report a
+      // duplicate email; send the shopper to log in instead.
+      if (
+        error instanceof SessionNotEstablishedError ||
+        error instanceof SessionCheckFailedError
+      ) {
         setAccountCreated(true)
       } else {
         setFormError(
@@ -45,7 +50,8 @@ export default function RegisterPage() {
     return (
       <AuthCard title="Account created">
         <FormAlert tone="success">
-          Your account is ready, but we couldn't sign you in automatically.
+          Your account is ready, but we couldn't finish signing you in. Log in to
+          continue.
         </FormAlert>
         <Link className="btn btn-primary btn-lg btn-block" to="/login" state={location.state}>
           Log in

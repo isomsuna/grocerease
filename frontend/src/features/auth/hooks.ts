@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { isApiError } from '../../lib/api/client'
 import * as authApi from './api'
@@ -7,12 +12,34 @@ import {
   currentUserQueryOptions,
   loadSessionUser,
 } from './session'
+import type { CurrentUser } from './types'
 
 export class SessionNotEstablishedError extends Error {
   constructor() {
     super('The API accepted the request but did not start a session.')
     this.name = 'SessionNotEstablishedError'
   }
+}
+
+/** The login/registration succeeded, but `/api/me/` could not be loaded. */
+export class SessionCheckFailedError extends Error {
+  constructor(cause: unknown) {
+    super('The request succeeded but the session check failed.', { cause })
+    this.name = 'SessionCheckFailedError'
+  }
+}
+
+async function confirmSession(queryClient: QueryClient): Promise<CurrentUser> {
+  let user: CurrentUser | null
+  try {
+    user = await loadSessionUser(queryClient)
+  } catch (error) {
+    throw new SessionCheckFailedError(error)
+  }
+  if (!user) {
+    throw new SessionNotEstablishedError()
+  }
+  return user
 }
 
 export function useCurrentUser() {
@@ -29,11 +56,7 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (data: authApi.LoginRequest) => {
       await authApi.login(data)
-      const user = await loadSessionUser(queryClient)
-      if (!user) {
-        throw new SessionNotEstablishedError()
-      }
-      return user
+      return confirmSession(queryClient)
     },
   })
 }
@@ -44,11 +67,7 @@ export function useRegister() {
   return useMutation({
     mutationFn: async (data: authApi.RegisterRequest) => {
       await authApi.register(data)
-      const user = await loadSessionUser(queryClient)
-      if (!user) {
-        throw new SessionNotEstablishedError()
-      }
-      return user
+      return confirmSession(queryClient)
     },
   })
 }

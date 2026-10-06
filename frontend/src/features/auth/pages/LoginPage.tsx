@@ -7,9 +7,11 @@ import { FormAlert } from '../../../components/ui/FormAlert'
 import { TextField } from '../../../components/ui/TextField'
 import { applyApiErrors } from '../../../lib/api/errors'
 import { AuthCard } from '../components/AuthCard'
-import { SessionNotEstablishedError, useLogin } from '../hooks'
+import { SessionCheckFailedError, SessionNotEstablishedError, useLogin } from '../hooks'
 import { loginSchema, type LoginValues } from '../schemas'
 
+const SESSION_CHECK_FAILED =
+  "You're logged in, but we couldn't load your account. Check your connection and log in again."
 const SESSION_NOT_STARTED =
   "You were signed in, but your browser didn't keep the session. Check that cookies are allowed and try again."
 
@@ -36,6 +38,8 @@ export default function LoginPage() {
     } catch (error) {
       if (error instanceof SessionNotEstablishedError) {
         setFormError(SESSION_NOT_STARTED)
+      } else if (error instanceof SessionCheckFailedError) {
+        setFormError(SESSION_CHECK_FAILED)
       } else {
         setFormError(applyApiErrors(error, setError, ['email', 'password']))
       }

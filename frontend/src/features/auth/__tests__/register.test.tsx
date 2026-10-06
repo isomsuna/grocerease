@@ -146,4 +146,43 @@ describe('registration', () => {
     expect(screen.getByLabelText('Email')).toHaveValue('alex@example.com')
     expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled()
   })
+
+  it('retries a failed session check after registering', async () => {
+    const api = createFakeApi()
+    let meFailures = 0
+    api.on('POST /auth/register/', ({ body }) => {
+      const { display_name, email } = body as Record<string, string>
+      const created = { id: 2, display_name, email }
+      api.on('GET /me/', () => (meFailures++ === 0 ? { status: 503 } : { body: created }))
+      return { status: 201, body: created }
+    })
+    const { user, location } = renderApp('/register')
+    await screen.findByRole('heading', { name: 'Create your account' })
+
+    await fillRegistration(user)
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alex.' })).toBeInTheDocument()
+    expect(location()).toBe('/')
+    expect(api.requests('POST /auth/register/')).toHaveLength(1)
+  })
+
+  it('does not offer to resubmit when the account was created but the session check fails', async () => {
+    const api = createFakeApi()
+    api.on('POST /auth/register/', () => {
+      api.on('GET /me/', { status: 503 })
+      return { status: 201, body: { id: 2, display_name: 'Alex', email: 'alex@example.com' } }
+    })
+    const { user } = renderApp('/register')
+    await screen.findByRole('heading', { name: 'Create your account' })
+
+    await fillRegistration(user)
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+
+    expect(await screen.findByRole('heading', { name: 'Account created' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent("couldn't finish signing you in")
+    expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login')
+    expect(screen.queryByRole('button', { name: 'Create account' })).not.toBeInTheDocument()
+    expect(api.requests('GET /me/').length).toBeGreaterThanOrEqual(2)
+  })
 })

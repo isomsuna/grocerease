@@ -35,7 +35,15 @@ export function clearPrivateState(queryClient: QueryClient): void {
   queryClient.setQueryData<CurrentUser | null>(currentUserQueryKey, null)
 }
 
-/** Loads the session from `/api/me/` after a login or registration request. */
+/**
+ * Loads the session from `/api/me/` after a login or registration request,
+ * retrying once so a brief failure doesn't hide a request that succeeded.
+ */
 export async function loadSessionUser(queryClient: QueryClient): Promise<CurrentUser | null> {
-  return queryClient.fetchQuery({ ...currentUserQueryOptions, staleTime: 0 })
+  return queryClient.fetchQuery({
+    ...currentUserQueryOptions,
+    staleTime: 0,
+    retry: 1,
+    retryDelay: 500,
+  })
 }

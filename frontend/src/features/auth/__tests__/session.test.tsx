@@ -74,6 +74,23 @@ describe('login', () => {
     expect(screen.getByLabelText('Password')).toHaveValue('correct horse battery')
   })
 
+  it('explains when login succeeds but the session check keeps failing', async () => {
+    const api = createFakeApi()
+    api.on('POST /auth/login/', () => {
+      api.on('GET /me/', { status: 503 })
+      return { body: alex }
+    })
+    const { user, location } = renderApp('/login')
+
+    await logIn(user)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "You're logged in, but we couldn't load your account.",
+    )
+    expect(screen.getByLabelText('Email')).toHaveValue('alex@example.com')
+    expect(location()).toBe('/login')
+  })
+
   it('reports a login that did not produce a session instead of entering the app', async () => {
     const api = createFakeApi()
     api.on('POST /auth/login/', { body: alex })
