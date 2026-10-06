@@ -59,6 +59,7 @@ class RegisterView(APIView):
 @method_decorator(csrf_protect, name='dispatch')
 class LoginView(APIView):
     permission_classes = (AllowAny,)
+    throttle_scope = 'login'
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -85,6 +86,7 @@ class LogoutView(APIView):
 @method_decorator(csrf_protect, name='dispatch')
 class PasswordResetRequestView(APIView):
     permission_classes = (AllowAny,)
+    throttle_scope = 'password_reset'
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)

@@ -95,7 +95,39 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '5/minute',
+        'password_reset': '3/hour',
+    },
 }
+
+
+def parse_secure_proxy_ssl_header(enabled: str) -> tuple[str, str] | None:
+    if enabled.strip().lower() in {'1', 'true', 'yes'}:
+        return ('HTTP_X_FORWARDED_PROTO', 'https')
+    return None
+
+
+def parse_csrf_trusted_origins(origins: str) -> list[str]:
+    return [origin.strip() for origin in origins.split(',') if origin.strip()]
+
+
+def default_email_backend(*, debug: bool) -> str:
+    if debug:
+        return 'django.core.mail.backends.console.EmailBackend'
+    return 'django.core.mail.backends.smtp.EmailBackend'
+
+
+# Enable only when the trusted ingress proxy removes client-supplied forwarded headers.
+SECURE_PROXY_SSL_HEADER = parse_secure_proxy_ssl_header(
+    os.getenv('DJANGO_TRUST_PROXY_SSL_HEADER', 'false')
+)
+CSRF_TRUSTED_ORIGINS = parse_csrf_trusted_origins(
+    os.getenv('DJANGO_CSRF_TRUSTED_ORIGINS', '')
+)
 
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SAMESITE = 'Lax'
@@ -119,14 +151,11 @@ FRONTEND_PASSWORD_RESET_URL = validate_frontend_password_reset_url(os.getenv(
 DEFAULT_FROM_EMAIL = os.getenv('DJANGO_DEFAULT_FROM_EMAIL', 'noreply@grocerease.local')
 EMAIL_BACKEND = os.getenv(
     'DJANGO_EMAIL_BACKEND',
-    (
-        'django.core.mail.backends.locmem.EmailBackend'
-        if DEBUG
-        else 'django.core.mail.backends.smtp.EmailBackend'
-    ),
+    default_email_backend(debug=DEBUG),
 )
 EMAIL_HOST = os.getenv('DJANGO_EMAIL_HOST', 'localhost')
 EMAIL_PORT = int(os.getenv('DJANGO_EMAIL_PORT', '25'))
 EMAIL_HOST_USER = os.getenv('DJANGO_EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('DJANGO_EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.getenv('DJANGO_EMAIL_USE_TLS', 'false').lower() in {'1', 'true', 'yes'}
+EMAIL_TIMEOUT = float(os.getenv('DJANGO_EMAIL_TIMEOUT', '10'))
