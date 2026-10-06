@@ -4,7 +4,7 @@
 
 **Goal:** Align the Django account and timezone foundations with the product contract, add backend smoke coverage, and clean frontend/dependency automation warnings.
 
-**Architecture:** Keep Django's custom user model as the source of account identity and add a migration from the current username-based schema. Test the health endpoint through Django's test client, extract the home page component from the router module, and point Dependabot at each package manifest directory.
+**Architecture:** Keep Django's custom user model as the source of account identity. Because no real data exists yet, regenerate the accounts app's initial migration for the email-based model instead of migrating from the username-based schema. Test the health endpoint through Django's test client, extract the home page component from the router module, and point Dependabot at each package manifest directory.
 
 **Tech Stack:** Django 6.1, PostgreSQL 16, React, TypeScript, Vite, GitHub Dependabot.
 
@@ -24,6 +24,7 @@
 - Email-only user creation must not depend on a username field; test creation and uniqueness.
 - Health checks must return HTTP 200, JSON status `ok`, and `Cache-Control: no-store`.
 - Backend migration state must match the custom user model.
+- Every migration must be reversible; a test rolls all apps back to zero and reapplies them.
 - Router module must export the router without defining a React component in that module.
 - Dependabot directories must resolve to the two actual project roots.
 
@@ -36,7 +37,8 @@
 - [x] Implement the email manager/model fields and create the migration.
 - [x] Run the full backend suite (6 tests) and `makemigrations --check --dry-run`; both pass.
 - [x] Require `display_name`, remove inherited first/last name fields, and configure password similarity checks for email/display name.
-- [x] Preflight and backfill legacy accounts before the schema migration; mark the migration irreversible because removed usernames cannot be reconstructed safely.
+- [x] Replace the username-to-email data migration with a regenerated `0001_initial` for the email-based model (no real data exists), so the accounts migrations have no data steps and are fully reversible. Local databases created from the old `0001_initial` must be reset.
+- [x] Add a migration reversibility test that rolls every app back to zero and reapplies it; confirm it fails on an irreversible `RunPython`.
 
 ### Task 2: Manila timezone and backend smoke coverage
 
