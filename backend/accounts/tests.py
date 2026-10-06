@@ -1,11 +1,33 @@
+import json
+import re
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+
 from asgiref.sync import sync_to_async
 from django.contrib.auth import aauthenticate, authenticate
 from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
+from django.core import mail
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 
 from accounts.models import User
+from config.settings import validate_frontend_password_reset_url
+
+
+class AuthenticationConfigurationTests(SimpleTestCase):
+    def test_production_password_reset_url_must_use_https(self):
+        with self.assertRaises(ImproperlyConfigured):
+            validate_frontend_password_reset_url(
+                'http://localhost:5173/reset-password', debug=False
+            )
+
+        self.assertEqual(
+            validate_frontend_password_reset_url(
+                'https://shopper.example/reset-password', debug=False
+            ),
+            'https://shopper.example/reset-password',
+        )
 
 
 class UserIdentityTests(TestCase):
@@ -151,3 +173,290 @@ class UserIdentityTests(TestCase):
                 password='another-test-password',
                 display_name='Another Alex',
             )
+
+
+class AuthenticationApiTests(TestCase):
+    password = 'swordfish-Harbor-732!'
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    def request_json(self, method, path, data=None, *, csrf=True):
+        headers = {}
+        if method.lower() != 'get' and csrf:
+            self.client.get('/api/auth/csrf/')
+            csrf_cookie = self.client.cookies.get('csrftoken')
+            if csrf_cookie:
+                headers['HTTP_X_CSRFTOKEN'] = csrf_cookie.value
+        return getattr(self.client, method.lower())(
+            path,
+            data=json.dumps(data or {}),
+            content_type='application/json',
+            **headers,
+        )
+
+    def register(self, **overrides):
+        data = {
+            'display_name': 'Alex Shopper',
+            'email': 'alex@example.com',
+            'password': self.password,
+        }
+        data.update(overrides)
+        return self.request_json('post', '/api/auth/register/', data)
+
+    def test_csrf_bootstrap_sets_cookie_and_auth_mutation_rejects_missing_token(self):
+        response = self.client.get('/api/auth/csrf/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('csrftoken', response.cookies)
+        response = self.client.post(
+            '/api/auth/register/',
+            data=json.dumps({
+                'display_name': 'Alex Shopper',
+                'email': 'alex@example.com',
+                'password': self.password,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.exists())
+
+    def test_registration_normalizes_email_hashes_password_and_starts_session(self):
+        response = self.register(email='  Alex@Example.COM  ')
+
+        self.assertEqual(response.status_code, 201, response.content)
+        user = User.objects.get()
+        self.assertEqual(user.email, 'alex@example.com')
+        self.assertTrue(user.check_password(self.password))
+        self.assertNotEqual(user.password, self.password)
+        self.assertIn('_auth_user_id', self.client.session)
+        self.assertEqual(response.json(), {
+            'id': user.pk,
+            'display_name': 'Alex Shopper',
+            'email': 'alex@example.com',
+        })
+
+    def test_registration_rejects_case_insensitive_duplicate_email(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        response = self.register(email='ALEX@EXAMPLE.COM')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('email', response.json())
+        self.assertEqual(User.objects.count(), 1)
+
+    def test_registration_returns_validation_error_for_non_string_email(self):
+        response = self.register(email=['alex@example.com'])
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('email', response.json())
+        self.assertFalse(User.objects.exists())
+
+    def test_login_accepts_mixed_case_email_and_returns_only_safe_profile(self):
+        user = User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        response = self.request_json('post', '/api/auth/login/', {
+            'email': 'ALEX@EXAMPLE.COM', 'password': self.password,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'id': user.pk, 'display_name': 'Alex', 'email': 'alex@example.com',
+        })
+        self.assertIn('_auth_user_id', self.client.session)
+        self.assertNotIn('password', response.json())
+        self.assertNotIn(user.password, response.content.decode())
+
+    def test_login_failure_is_generic_for_unknown_email_and_wrong_password(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        wrong_password = self.request_json('post', '/api/auth/login/', {
+            'email': 'alex@example.com', 'password': 'incorrect-secret',
+        })
+        unknown_email = self.request_json('post', '/api/auth/login/', {
+            'email': 'missing@example.com', 'password': 'incorrect-secret',
+        })
+
+        self.assertEqual(wrong_password.status_code, 400)
+        self.assertEqual(unknown_email.status_code, 400)
+        self.assertEqual(wrong_password.json(), unknown_email.json())
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_logout_invalidates_session(self):
+        self.register()
+        self.assertIn('_auth_user_id', self.client.session)
+
+        response = self.request_json('post', '/api/auth/logout/')
+
+        self.assertEqual(response.status_code, 204)
+        self.assertNotIn('_auth_user_id', self.client.session)
+        self.assertEqual(self.client.get('/api/me/').status_code, 401)
+
+    def test_current_profile_get_and_patch_expose_only_safe_fields(self):
+        self.register()
+        response = self.client.get('/api/me/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json()), {'id', 'display_name', 'email'})
+
+        response = self.request_json('patch', '/api/me/', {
+            'display_name': 'Alex Market', 'email': 'ALEX@EXAMPLE.NET',
+            'is_staff': True, 'password': 'attempted-mass-assignment',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['display_name'], 'Alex Market')
+        self.assertEqual(response.json()['email'], 'alex@example.net')
+        self.assertEqual(set(response.json()), {'id', 'display_name', 'email'})
+        user = User.objects.get()
+        self.assertFalse(user.is_staff)
+        self.assertTrue(user.check_password(self.password))
+
+    def test_protected_profile_returns_401_without_authentication(self):
+        response = self.client.get('/api/me/')
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_session_authenticated_profile_mutation_requires_csrf(self):
+        self.register()
+        response = self.client.patch(
+            '/api/me/', data=json.dumps({'display_name': 'Changed'}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(User.objects.get().display_name, 'Alex Shopper')
+
+
+@override_settings(
+    EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
+    DEFAULT_FROM_EMAIL='noreply@example.com',
+    FRONTEND_PASSWORD_RESET_URL='https://app.example/reset-password',
+)
+class PasswordLifecycleApiTests(AuthenticationApiTests):
+    new_password = 'Harbor-Pebble-419!'
+
+    def setUp(self):
+        super().setUp()
+        mail.outbox.clear()
+
+    def start_reset(self, email):
+        response = self.request_json('post', '/api/auth/password-reset/', {'email': email})
+        self.assertEqual(response.status_code, 200, response.content)
+        return response
+
+    def confirm_reset(self, uid, token, password=None):
+        return self.request_json('post', '/api/auth/password-reset/confirm/', {
+            'uid': uid,
+            'token': token,
+            'new_password': password or self.new_password,
+        })
+
+    def reset_uid_and_token(self):
+        reset_url = re.search(r'https://app\.example/reset-password\?[^\s]+', mail.outbox[0].body)
+        self.assertIsNotNone(reset_url)
+        query = parse_qs(urlparse(reset_url.group(0)).query)
+        return query['uid'][0], query['token'][0]
+
+    def test_password_reset_acknowledgment_does_not_disclose_account_or_token(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        known = self.start_reset('alex@example.com')
+        unknown = self.start_reset('missing@example.com')
+
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(known.json(), unknown.json())
+        self.assertNotIn('token', known.content.decode().lower())
+        self.assertNotIn('uid', known.content.decode().lower())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('alex@example.com', mail.outbox[0].to)
+
+    @patch('accounts.services.send_mail', side_effect=OSError('SMTP unavailable'))
+    def test_password_reset_keeps_generic_acknowledgment_when_delivery_fails(self, _send_mail):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        with self.assertLogs('accounts.services', level='WARNING') as delivery_logs:
+            known = self.start_reset('alex@example.com')
+        unknown = self.start_reset('missing@example.com')
+
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(known.json(), unknown.json())
+        self.assertEqual(
+            delivery_logs.output,
+            ['WARNING:accounts.services:Password reset email delivery failed.'],
+        )
+
+    def test_password_reset_confirm_changes_password_and_invalidates_old_sessions(self):
+        self.register()
+        old_session_client = self.client
+        self.client = Client(enforce_csrf_checks=True)
+        self.start_reset('alex@example.com')
+        uid, token = self.reset_uid_and_token()
+
+        response = self.confirm_reset(uid, token)
+
+        self.assertEqual(response.status_code, 200, response.content)
+        user = User.objects.get()
+        self.assertTrue(user.check_password(self.new_password))
+        self.assertEqual(old_session_client.get('/api/me/').status_code, 401)
+        self.assertNotIn(token, response.content.decode())
+
+    def test_password_reset_rejects_invalid_token_and_weak_password(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+        uid, token = self.reset_uid_and_token()
+
+        invalid = self.confirm_reset(uid, 'invalid-token')
+        weak = self.confirm_reset(uid, token, '123')
+
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(weak.status_code, 400)
+        self.assertTrue(User.objects.get().check_password(self.password))
+
+    def test_password_change_returns_401_without_authentication(self):
+        response = self.request_json('post', '/api/auth/password-change/', {
+            'current_password': 'anything', 'new_password': self.new_password,
+        })
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_password_change_requires_correct_current_password_and_keeps_session(self):
+        self.register()
+        invalid = self.request_json('post', '/api/auth/password-change/', {
+            'current_password': 'wrong-current-password',
+            'new_password': self.new_password,
+        })
+        self.assertEqual(invalid.status_code, 400)
+        self.assertTrue(User.objects.get().check_password(self.password))
+
+        changed = self.request_json('post', '/api/auth/password-change/', {
+            'current_password': self.password,
+            'new_password': self.new_password,
+        })
+
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(set(changed.json()), {'detail'})
+        self.assertNotIn(self.new_password, changed.content.decode())
+        self.assertNotIn(self.password, changed.content.decode())
+        self.assertEqual(self.client.get('/api/me/').status_code, 200)
+        other_client = Client(enforce_csrf_checks=True)
+        self.client = other_client
+        old_login = self.request_json('post', '/api/auth/login/', {
+            'email': 'alex@example.com', 'password': self.password,
+        })
+        new_login = self.request_json('post', '/api/auth/login/', {
+            'email': 'alex@example.com', 'password': self.new_password,
+        })
+        self.assertEqual(old_login.status_code, 400)
+        self.assertEqual(new_login.status_code, 200)

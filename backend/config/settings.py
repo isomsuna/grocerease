@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
+
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -84,3 +87,46 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'accounts.authentication.SessionAuthenticationWith401',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_HTTPONLY = False
+
+def validate_frontend_password_reset_url(url: str, *, debug: bool) -> str:
+    parsed_url = urlparse(url)
+    if not debug and (parsed_url.scheme != 'https' or not parsed_url.netloc):
+        raise ImproperlyConfigured(
+            'FRONTEND_PASSWORD_RESET_URL must be an absolute HTTPS URL when DEBUG is false.'
+        )
+    return url
+
+
+FRONTEND_PASSWORD_RESET_URL = validate_frontend_password_reset_url(os.getenv(
+    'FRONTEND_PASSWORD_RESET_URL',
+    'http://localhost:5173/reset-password' if DEBUG else '',
+), debug=DEBUG)
+DEFAULT_FROM_EMAIL = os.getenv('DJANGO_DEFAULT_FROM_EMAIL', 'noreply@grocerease.local')
+EMAIL_BACKEND = os.getenv(
+    'DJANGO_EMAIL_BACKEND',
+    (
+        'django.core.mail.backends.locmem.EmailBackend'
+        if DEBUG
+        else 'django.core.mail.backends.smtp.EmailBackend'
+    ),
+)
+EMAIL_HOST = os.getenv('DJANGO_EMAIL_HOST', 'localhost')
+EMAIL_PORT = int(os.getenv('DJANGO_EMAIL_PORT', '25'))
+EMAIL_HOST_USER = os.getenv('DJANGO_EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('DJANGO_EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.getenv('DJANGO_EMAIL_USE_TLS', 'false').lower() in {'1', 'true', 'yes'}
