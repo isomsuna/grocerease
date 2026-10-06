@@ -91,6 +91,22 @@ describe('login', () => {
     expect(location()).toBe('/login')
   })
 
+  it('shows a friendly message when the API throttles login attempts', async () => {
+    const api = createFakeApi()
+    api.on('POST /auth/login/', {
+      status: 429,
+      body: { detail: 'Request was throttled. Expected available in 42 seconds.' },
+    })
+    const { user } = renderApp('/login')
+
+    await logIn(user)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Too many attempts. Please wait a moment and try again.')
+    expect(alert).not.toHaveTextContent('throttled')
+    expect(screen.getByLabelText('Password')).toHaveValue('correct horse battery')
+  })
+
   it('reports a login that did not produce a session instead of entering the app', async () => {
     const api = createFakeApi()
     api.on('POST /auth/login/', { body: alex })

@@ -5,6 +5,7 @@ const NETWORK_ERROR = "We couldn't reach GrocerEase. Check your connection and t
 const SERVER_ERROR = 'Something went wrong on our side. Please try again.'
 const RATE_LIMITED = 'Too many attempts. Please wait a moment and try again.'
 const GENERIC_ERROR = "We couldn't complete that request. Please try again."
+const CSRF_FAILED = 'Your session needs refreshing. Reload the page and try again.'
 
 type ErrorMap = Record<string, string[]>
 
@@ -60,13 +61,38 @@ export function getFallbackErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) {
     return NETWORK_ERROR
   }
-  if (error.status === 429) {
-    return RATE_LIMITED
+  const replacement = getReplacementMessage(error)
+  if (replacement) {
+    return replacement
   }
   if (error.status >= 500) {
     return SERVER_ERROR
   }
   return GENERIC_ERROR
+}
+
+function isCsrfFailure(error: ApiError): boolean {
+  const body = error.body
+  return (
+    error.status === 403 &&
+    isRecord(body) &&
+    typeof body.detail === 'string' &&
+    body.detail.startsWith('CSRF Failed')
+  )
+}
+
+/**
+ * A fixed user-facing message for failures whose API text is technical
+ * (DRF's throttle and CSRF `detail` strings), or `null` for other errors.
+ */
+function getReplacementMessage(error: unknown): string | null {
+  if (!(error instanceof ApiError)) {
+    return null
+  }
+  if (error.status === 429) {
+    return RATE_LIMITED
+  }
+  return isCsrfFailure(error) ? CSRF_FAILED : null
 }
 
 /**
@@ -80,6 +106,11 @@ export function applyApiErrors<T extends FieldValues>(
   fields: readonly Path<T>[],
   aliases: Readonly<Record<string, Path<T>>> = {},
 ): string | null {
+  const replacement = getReplacementMessage(error)
+  if (replacement) {
+    return replacement
+  }
+
   const errorMap = getApiErrorMap(error)
   const formMessages: string[] = []
   let focused = false
