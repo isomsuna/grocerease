@@ -1,5 +1,9 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
+const CSRF_COOKIE_NAME = 'csrftoken'
+const CSRF_HEADER_NAME = 'X-CSRFToken'
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
+
 export class ApiError extends Error {
   public readonly status: number
   public readonly body: unknown
@@ -15,6 +19,41 @@ export class ApiError extends Error {
   }
 }
 
+export function isApiError(error: unknown, status?: number): error is ApiError {
+  return (
+    error instanceof ApiError && (status === undefined || error.status === status)
+  )
+}
+
+function readCookie(name: string): string | undefined {
+  const prefix = `${name}=`
+  const cookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : undefined
+}
+
+let csrfBootstrap: Promise<unknown> | null = null
+
+/**
+ * Returns the CSRF cookie value, asking the API to issue one first when the
+ * browser has none (for example before an anonymous login or registration).
+ */
+async function getCsrfToken(): Promise<string | undefined> {
+  const existing = readCookie(CSRF_COOKIE_NAME)
+  if (existing) {
+    return existing
+  }
+
+  csrfBootstrap ??= apiRequest('/auth/csrf/').finally(() => {
+    csrfBootstrap = null
+  })
+  await csrfBootstrap
+  return readCookie(CSRF_COOKIE_NAME)
+}
+
 export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -24,6 +63,15 @@ export async function apiRequest<T>(
 
   if (options.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
+  }
+
+  // Django rotates the CSRF token on login, so read the cookie per request.
+  const method = (options.method ?? 'GET').toUpperCase()
+  if (!SAFE_METHODS.has(method) && !headers.has(CSRF_HEADER_NAME)) {
+    const csrfToken = await getCsrfToken()
+    if (csrfToken) {
+      headers.set(CSRF_HEADER_NAME, csrfToken)
+    }
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -41,4 +89,11 @@ export async function apiRequest<T>(
   }
 
   return body as T
+}
+
+export function apiPost<T>(path: string, data?: unknown): Promise<T> {
+  return apiRequest<T>(path, {
+    method: 'POST',
+    body: data === undefined ? undefined : JSON.stringify(data),
+  })
 }

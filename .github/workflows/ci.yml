@@ -25,7 +25,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -35,6 +35,10 @@ jobs:
       - name: Lint
         id: lint
         run: npm run lint
+
+      - name: Unit and component tests
+        id: test
+        run: npm test
 
       - name: Build and type check
         id: build
@@ -46,7 +50,7 @@ jobs:
           echo "## Frontend CI Results" >> "$GITHUB_STEP_SUMMARY"
           echo "- Lint: ${{ steps.lint.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Type check and production build: ${{ steps.build.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Unit tests: not configured (no frontend test script exists yet)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Unit and component tests: ${{ steps.test.outcome }}" >> "$GITHUB_STEP_SUMMARY"
 
   backend:
     runs-on: ubuntu-latest

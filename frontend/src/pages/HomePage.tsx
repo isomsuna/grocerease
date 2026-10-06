@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useCurrentUser } from '../features/auth/hooks'
 import { apiRequest } from '../lib/api/client'
 
 type HealthResponse = {
@@ -6,6 +7,7 @@ type HealthResponse = {
 }
 
 export default function HomePage() {
+  const { data: user } = useCurrentUser()
   const health = useQuery({
     queryKey: ['api-health'],
     queryFn: () => apiRequest<HealthResponse>('/health/'),
@@ -14,7 +16,9 @@ export default function HomePage() {
   return (
     <section aria-labelledby="welcome-title" className="welcome">
       <p className="eyebrow">GrocerEase</p>
-      <h1 id="welcome-title">Your grocery planning starts here.</h1>
+      <h1 id="welcome-title">
+        {user ? `Welcome, ${user.display_name}.` : 'Welcome.'}
+      </h1>
       <p>
         Record shopping sessions, learn from your price history, and plan your
         next trip around your budget.
