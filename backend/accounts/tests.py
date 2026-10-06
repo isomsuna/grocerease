@@ -2,7 +2,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import aauthenticate, authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from accounts.models import User
@@ -46,6 +46,25 @@ class UserIdentityTests(TestCase):
             authenticate(email='ALEX@gmail.com', password='safe-test-password'),
             user,
         )
+
+    def test_model_save_normalizes_email_to_lowercase(self):
+        user = User(email='Alex@GMAIL.com', display_name='Alex')
+        user.set_password('safe-test-password')
+        user.save()
+
+        self.assertEqual(user.email, 'alex@gmail.com')
+        self.assertEqual(User.objects.get(pk=user.pk).email, 'alex@gmail.com')
+
+    def test_database_rejects_mixed_case_email_written_without_model_save(self):
+        user = User.objects.create_user(
+            email='alex@example.com',
+            password='safe-test-password',
+            display_name='Alex',
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                User.objects.filter(pk=user.pk).update(email='Alex@EXAMPLE.com')
 
     async def test_async_email_login_is_case_insensitive(self):
         user = await sync_to_async(User.objects.create_user)(

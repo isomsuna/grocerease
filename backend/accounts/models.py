@@ -22,7 +22,16 @@ class User(AbstractUser):
     class Meta(AbstractUser.Meta):
         constraints = [
             models.UniqueConstraint(Lower('email'), name='accounts_user_email_ci_uniq'),
+            models.CheckConstraint(
+                condition=models.Q(email=Lower('email')),
+                name='accounts_user_email_lowercase',
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        return super().save(*args, **kwargs)
 
     def get_full_name(self):
         return self.display_name

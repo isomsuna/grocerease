@@ -87,5 +87,11 @@ class Migration(migrations.Migration):
                 name='accounts_user_email_ci_uniq',
             ),
         ),
-        migrations.RunPython(migrations.RunPython.noop, reverse_code=None),
+        migrations.AddConstraint(
+            model_name='user',
+            constraint=models.CheckConstraint(
+                condition=models.Q(email=Lower('email')),
+                name='accounts_user_email_lowercase',
+            ),
+        ),
     ]
