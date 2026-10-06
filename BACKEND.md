@@ -1740,7 +1740,7 @@ Use appropriate transaction/locking if concurrent completion requests could othe
 
 **Acceptance criteria:**
 
-- PATCH validates owned, ACTIVE store.
+- When PATCH sets or changes `store_id`, it validates that the store is owned and ACTIVE. A PATCH that leaves `store_id` unchanged is not rejected because the existing store has since been archived (see §4.2).
 - Next estimate uses only new store history.
 - Purchase history remains untouched.
 
