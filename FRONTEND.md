@@ -1282,15 +1282,18 @@ Copy:
 Profile:
 
 - Display name
-- Email
+- Email — when the email changes, ask for the current password and send it as `current_password`; a display-name-only save does not ask for it
 
 Account:
 
-- Change password
+- Change password — current password, new password, confirm new password
 - Log out
+
+A missing or wrong current password is shown as an error on the current-password field, and the other entered values are kept.
 
 ### Success criteria
 
+- Email and password changes cannot be saved without the current password.
 - Logout clears private query cache.
 
 ---

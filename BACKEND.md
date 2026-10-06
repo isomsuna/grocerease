@@ -122,7 +122,10 @@ Deployment may use secure same-site session cookies or a secure token strategy. 
 ### Rules
 
 - Email is the MVP login identifier and is unique.
+- Changing the account email or password requires the current password (see §5.1).
 - Passwords never appear in responses/logs.
+- Password-reset requests enqueue durable email jobs without persisting reset tokens. Run `python manage.py send_password_reset_emails` as a worker process to deliver and retry queued mail.
+- Authentication throttles use the PostgreSQL database cache table installed by migrations. Set `DJANGO_NUM_PROXIES` to the trusted ingress proxy count in every deployment; production startup fails if it is missing. Use `0` only when clients connect directly without a trusted proxy. The ingress must remove client-supplied forwarded headers before appending its own.
 - Production cookies/tokens use secure configuration.
 - CSRF/CORS matches deployment topology.
 
@@ -552,6 +555,19 @@ Response should include at minimum:
 ### Rules
 
 - Email uniqueness enforced when changed.
+- Changing `email` requires `current_password` in the same `PATCH` request. A missing or incorrect current password returns `400` with an error on `current_password`, and nothing is updated.
+- Re-sending the shopper's existing email (ignoring letter case) is not a change and needs no password.
+- Changing only `display_name` does not require the current password.
+- `POST /api/auth/password-change/` requires `current_password` and `new_password`; an incorrect current password returns `400` with an error on `current_password`.
+
+Email-change request example:
+
+```json
+{
+  "email": "new-address@example.com",
+  "current_password": "..."
+}
+```
 
 ---
 
@@ -1479,6 +1495,7 @@ Use appropriate transaction/locking if concurrent completion requests could othe
 - Django password hashing.
 - Login/logout/current-user endpoints.
 - Password reset/change supported.
+- Email and password changes require the current password.
 - Password never serialized.
 
 ---
@@ -1863,6 +1880,7 @@ No plan-duplicate endpoint exists in MVP.
 
 - Registration uniqueness.
 - Login/logout.
+- Email change and password change reject a missing or incorrect current password and leave the account unchanged; display-name-only profile updates need no password.
 - User A cannot access User B store/product/session/plan/item.
 - Foreign-key injection blocked.
 

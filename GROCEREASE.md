@@ -205,6 +205,7 @@ Keep each shopper's stores, products, purchase history, plans, and budgets priva
 - Every user-owned resource is scoped to the authenticated user.
 - Client-supplied ownership IDs are never trusted.
 - All money is in Philippine pesos (PHP); there is no per-user currency setting.
+- Sensitive account changes require the shopper's current password: changing the account email and changing the password. Changing only the display name does not.
 
 ### Success criteria
 
@@ -888,15 +889,16 @@ Completing a plan means the shopper is done using that planning record.
 ### Profile
 
 - Display name
-- Email
+- Email (changing it requires the current password)
 
 ### Account
 
-- Change password
+- Change password (requires the current password)
 - Log out
 
 ### Success criteria
 
+- Changing the email or password fails without the correct current password; changing only the display name needs no password.
 - Money is displayed consistently in Philippine pesos (`₱`, 2 decimal places) throughout the UI.
 
 ---
