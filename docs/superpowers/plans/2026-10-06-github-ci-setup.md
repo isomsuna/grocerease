@@ -41,7 +41,7 @@
 - [x] Configure frontend checkout, Node 20, npm cache dependency path, `npm ci`, lint, and production build. The build provides TypeScript checking. Do not invoke missing frontend test scripts.
 - [x] Configure PostgreSQL 16 service, Python 3.12, requirements cache/install, migration check, and Django tests with the environment names expected by Django settings.
 - [x] Keep failures blocking; run summary reporting with `if: always()`.
-- [x] Parse the workflow YAML with PyYAML; run frontend lint and production build locally. Lint exited successfully with an existing `react(only-export-components)` warning in `frontend/src/app/router.tsx`, and the production build succeeded. Backend migration checks and Django tests were not run locally; the CI run remains their first validation.
+- [x] Parse the workflow YAML with PyYAML; run frontend lint and production build locally. Lint exited successfully with an existing `react(only-export-components)` warning in `frontend/src/app/router.tsx`, and the production build succeeded. Backend migration checks and Django tests passed in PR CI run `37419569056`.
 
 ### Task 2: Issue and Pull Request Templates
 
@@ -92,5 +92,5 @@
 - [x] Apply the protection settings that can be safely enabled now.
 - [x] Require one approval and conversation resolution; disable force pushes and deletions.
 - [x] Ruling: use GitHub's default administrator bypass for the personal repository — GitHub only supports explicit push restrictions for organization-owned repositories, and the sole collaborator is the owner/admin — cost if wrong: administrators can push directly to `main` without PR review.
-- [ ] Add `frontend` and `backend` as required checks only after GitHub has observed those checks; workflow is not yet pushed/run.
-- [x] Read back the protection rule; required checks remain deferred until the first workflow run.
+- [x] Add `frontend` and `backend` as required checks after GitHub observed both checks in PR CI run `37419569056`.
+- [x] Read back the protection rule; both required checks are configured alongside the existing review and conversation-resolution requirements.
