@@ -8,6 +8,11 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError('An email address is required.')
 
+        display_name = extra_fields.get('display_name')
+        if not display_name or not display_name.strip():
+            raise ValueError('A display name is required.')
+        extra_fields['display_name'] = display_name.strip()
+
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)

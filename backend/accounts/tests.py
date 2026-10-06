@@ -1,4 +1,6 @@
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase
 
@@ -35,6 +37,35 @@ class UserIdentityTests(TestCase):
 
         self.assertTrue(user.is_staff)
         self.assertTrue(user.is_superuser)
+
+    def test_display_name_is_required_when_creating_a_user(self):
+        with self.assertRaisesMessage(ValueError, 'A display name is required.'):
+            User.objects.create_user(email='alex@example.com', password='safe-test-password')
+
+        with self.assertRaisesMessage(ValueError, 'A display name is required.'):
+            User.objects.create_user(
+                email='alex@example.com',
+                password='safe-test-password',
+                display_name='  ',
+            )
+
+    def test_display_name_is_the_users_only_name_field(self):
+        user = User.objects.create_user(
+            email='alex@example.com',
+            password='safe-test-password',
+            display_name='Alex Example',
+        )
+
+        self.assertNotIn('first_name', {field.name for field in User._meta.fields})
+        self.assertNotIn('last_name', {field.name for field in User._meta.fields})
+        self.assertEqual(user.get_full_name(), 'Alex Example')
+        self.assertEqual(user.get_short_name(), 'Alex Example')
+
+    def test_password_similarity_validator_checks_display_name(self):
+        user = User(email='alex@example.com', display_name='Alexandria')
+
+        with self.assertRaises(ValidationError):
+            validate_password('Alexandria123', user)
 
     def test_duplicate_email_cannot_be_created(self):
         User.objects.create_user(

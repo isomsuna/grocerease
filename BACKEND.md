@@ -281,6 +281,8 @@ display_name
 ### Rules
 
 - API exposes one canonical `display_name`.
+- `display_name` is required, and Django's `get_full_name()` and `get_short_name()` return it.
+- Email is required and unique; authentication uses the email address.
 - There is no per-user currency setting; all money is PHP.
 
 ---

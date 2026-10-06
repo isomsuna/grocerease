@@ -6,7 +6,7 @@
 
 **Architecture:** Keep Django's custom user model as the source of account identity and add a migration from the current username-based schema. Test the health endpoint through Django's test client, extract the home page component from the router module, and point Dependabot at each package manifest directory.
 
-**Tech Stack:** Django 5.2, PostgreSQL 16, React, TypeScript, Vite, GitHub Dependabot.
+**Tech Stack:** Django 6.1, PostgreSQL 16, React, TypeScript, Vite, GitHub Dependabot.
 
 **Spec:** `GROCEREASE.md` and `BACKEND.md`.
 
@@ -34,6 +34,8 @@
 - [x] Run the focused tests and confirm the identity assertions fail against the current model.
 - [x] Implement the email manager/model fields and create the migration.
 - [x] Run the full backend suite (6 tests) and `makemigrations --check --dry-run`; both pass.
+- [x] Require `display_name`, remove inherited first/last name fields, and configure password similarity checks for email/display name.
+- [x] Preflight and backfill legacy accounts before the schema migration; mark the migration irreversible because removed usernames cannot be reconstructed safely.
 
 ### Task 2: Manila timezone and backend smoke coverage
 
