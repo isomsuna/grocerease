@@ -60,6 +60,7 @@ jobs:
     env:
       DJANGO_SECRET_KEY: ci-only-secret-key
       DJANGO_DEBUG: "false"
+      FRONTEND_PASSWORD_RESET_URL: https://grocerease.example/reset-password
       POSTGRES_DB: grocerease_test
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
