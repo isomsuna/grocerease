@@ -45,7 +45,7 @@ export default function ForgotPasswordPage() {
     return (
       <AuthCard title="Check your email" footer={backToLogin}>
         <FormAlert tone="success">
-          If an account exists for <strong>{sentTo}</strong>, we've sent a link to
+          If an account exists for <strong>{sentTo}</strong>, we'll send a link to
           reset your password.
         </FormAlert>
       </AuthCard>

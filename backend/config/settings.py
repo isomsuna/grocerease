@@ -88,6 +88,17 @@ USE_TZ = True
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+
+def parse_num_proxies(value: str) -> int:
+    try:
+        num_proxies = int(value)
+    except ValueError as exc:
+        raise ImproperlyConfigured('DJANGO_NUM_PROXIES must be a non-negative integer.') from exc
+    if num_proxies < 0:
+        raise ImproperlyConfigured('DJANGO_NUM_PROXIES must be a non-negative integer.')
+    return num_proxies
+
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'accounts.authentication.SessionAuthenticationWith401',
@@ -96,11 +107,21 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.ScopedRateThrottle',
+        'accounts.throttles.IPScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
+        'registration': '5/hour',
         'login': '5/minute',
         'password_reset': '3/hour',
+        'sensitive_account_change': '5/minute',
+    },
+    'NUM_PROXIES': parse_num_proxies(os.getenv('DJANGO_NUM_PROXIES', '0')),
+}
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'grocerease_auth_throttle_cache',
     },
 }
 

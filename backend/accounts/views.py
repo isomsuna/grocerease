@@ -1,7 +1,6 @@
 from django.contrib.auth import login, logout, update_session_auth_hash
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
-from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from django.views.decorators.http import require_GET
@@ -27,12 +26,12 @@ from accounts.services import (
     reset_password,
     send_password_reset,
 )
+from accounts.throttles import UserScopedRateThrottle
 
 
 @require_GET
 @ensure_csrf_cookie
 def csrf_bootstrap(request):
-    get_token(request)
     response = JsonResponse({'detail': 'CSRF cookie set.'})
     response['Cache-Control'] = 'no-store'
     return response
@@ -41,6 +40,7 @@ def csrf_bootstrap(request):
 @method_decorator(csrf_protect, name='dispatch')
 class RegisterView(APIView):
     permission_classes = (AllowAny,)
+    throttle_scope = 'registration'
 
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
@@ -49,7 +49,7 @@ class RegisterView(APIView):
             user = register_user(**serializer.validated_data)
         except EmailAlreadyRegistered:
             return Response(
-                {'email': ['An account with this email already exists.']},
+                {'detail': 'Unable to create an account with the supplied details.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         login(request, user)
@@ -92,7 +92,9 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         send_password_reset(email=serializer.validated_data['email'])
-        return Response({'detail': 'If an account exists for that email, reset instructions have been sent.'})
+        return Response({
+            'detail': 'If an account exists for that email, reset instructions will be sent.',
+        })
 
 
 @method_decorator(csrf_protect, name='dispatch')
@@ -115,6 +117,9 @@ class PasswordResetConfirmView(APIView):
 
 @method_decorator(csrf_protect, name='dispatch')
 class PasswordChangeView(APIView):
+    throttle_classes = (UserScopedRateThrottle,)
+    throttle_scope = 'sensitive_account_change'
+
     def post(self, request):
         serializer = PasswordChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -135,6 +140,12 @@ class PasswordChangeView(APIView):
 
 class CurrentUserView(APIView):
     permission_classes = (IsAuthenticated,)
+    throttle_scope = 'sensitive_account_change'
+
+    def get_throttles(self):
+        if self.request.method == 'PATCH':
+            return [UserScopedRateThrottle()]
+        return []
 
     def get(self, request):
         return Response(SafeUserSerializer(request.user).data)

@@ -20,7 +20,7 @@ class RegistrationSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError('An account with this email already exists.')
+            raise serializers.ValidationError('Unable to create an account with the supplied details.')
         return value
 
     def validate(self, attrs):
@@ -66,12 +66,6 @@ class ProfileSerializer(serializers.ModelSerializer):
         fields = ('id', 'display_name', 'email', 'current_password')
         read_only_fields = ('id',)
 
-    def validate_display_name(self, value):
-        value = value.strip()
-        if not value:
-            raise serializers.ValidationError('This field may not be blank.')
-        return value
-
     def validate_email(self, value):
         users = User.objects.filter(email__iexact=value).exclude(pk=self.instance.pk)
         if users.exists():
@@ -80,7 +74,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         email = attrs.get('email', self.instance.email)
-        if email.strip().casefold() != self.instance.email.casefold():
+        if email.strip().lower() != self.instance.email:
             current_password = attrs.get('current_password')
             if not current_password or not self.instance.check_password(current_password):
                 raise serializers.ValidationError({

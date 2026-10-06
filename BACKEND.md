@@ -124,6 +124,8 @@ Deployment may use secure same-site session cookies or a secure token strategy. 
 - Email is the MVP login identifier and is unique.
 - Changing the account email or password requires the current password (see §5.1).
 - Passwords never appear in responses/logs.
+- Password-reset requests enqueue durable email jobs without persisting reset tokens. Run `python manage.py send_password_reset_emails` as a worker process to deliver and retry queued mail.
+- Authentication throttles use the PostgreSQL database cache table installed by migrations; configure `DJANGO_NUM_PROXIES` to match the trusted ingress proxy count, or leave it at `0` to ignore `X-Forwarded-For`.
 - Production cookies/tokens use secure configuration.
 - CSRF/CORS matches deployment topology.
 

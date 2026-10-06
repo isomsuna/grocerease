@@ -28,7 +28,7 @@ describe('forgot password', () => {
     await user.click(screen.getByRole('button', { name: 'Send reset link' }))
 
     expect(await screen.findByRole('status')).toHaveTextContent(
-      "If an account exists for alex@example.com, we've sent a link to reset your password.",
+      "If an account exists for alex@example.com, we'll send a link to reset your password.",
     )
     expect(api.requests('POST /auth/password-reset/')[0].body).toEqual({
       email: 'alex@example.com',

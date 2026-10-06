@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import timedelta
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -9,10 +10,14 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
 from django.core import mail
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
-from accounts.models import User
+from accounts.models import PasswordResetEmailJob, User
+from accounts.services import process_password_reset_email_jobs
 from config.settings import validate_frontend_password_reset_url
 
 
@@ -34,6 +39,7 @@ class AuthenticationConfigurationTests(SimpleTestCase):
         from config.settings import (
             default_email_backend,
             parse_csrf_trusted_origins,
+            parse_num_proxies,
             parse_secure_proxy_ssl_header,
         )
 
@@ -42,6 +48,9 @@ class AuthenticationConfigurationTests(SimpleTestCase):
             ('HTTP_X_FORWARDED_PROTO', 'https'),
         )
         self.assertIsNone(parse_secure_proxy_ssl_header('false'))
+        self.assertEqual(parse_num_proxies('2'), 2)
+        with self.assertRaises(ImproperlyConfigured):
+            parse_num_proxies('-1')
         self.assertEqual(
             parse_csrf_trusted_origins(' https://app.example, https://admin.example '),
             ['https://app.example', 'https://admin.example'],
@@ -66,11 +75,19 @@ class AuthenticationConfigurationTests(SimpleTestCase):
     def test_auth_scopes_have_throttle_rates(self):
         from django.conf import settings
 
-        self.assertIn('rest_framework.throttling.ScopedRateThrottle', settings.REST_FRAMEWORK[
+        self.assertIn('accounts.throttles.IPScopedRateThrottle', settings.REST_FRAMEWORK[
             'DEFAULT_THROTTLE_CLASSES'
         ])
         self.assertEqual(settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['login'], '5/minute')
         self.assertEqual(settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['password_reset'], '3/hour')
+        self.assertEqual(settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['registration'], '5/hour')
+        self.assertEqual(
+            settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['sensitive_account_change'],
+            '5/minute',
+        )
+        self.assertEqual(settings.REST_FRAMEWORK['NUM_PROXIES'], 0)
+        self.assertEqual(settings.CACHES['default']['BACKEND'], 'django.core.cache.backends.db.DatabaseCache')
+        self.assertEqual(settings.CACHES['default']['LOCATION'], 'grocerease_auth_throttle_cache')
         self.assertGreater(settings.EMAIL_TIMEOUT, 0)
 
 
@@ -313,8 +330,19 @@ class AuthenticationApiTests(TestCase):
         response = self.register(email='ALEX@EXAMPLE.COM')
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn('email', response.json())
+        self.assertEqual(response.json(), {
+            'email': ['Unable to create an account with the supplied details.'],
+        })
         self.assertEqual(User.objects.count(), 1)
+
+    def test_registration_is_rate_limited(self):
+        responses = [
+            self.register(email=f'shopper-{index}@example.com')
+            for index in range(6)
+        ]
+
+        self.assertTrue(all(response.status_code == 201 for response in responses[:5]))
+        self.assertEqual(responses[5].status_code, 429)
 
     def test_registration_returns_validation_error_for_non_string_email(self):
         response = self.register(email=['alex@example.com'])
@@ -387,6 +415,13 @@ class AuthenticationApiTests(TestCase):
         self.assertFalse(user.is_staff)
         self.assertTrue(user.check_password(self.password))
 
+    def test_current_profile_reads_are_not_limited_by_sensitive_action_throttle(self):
+        self.register()
+
+        responses = [self.client.get('/api/me/') for _ in range(6)]
+
+        self.assertTrue(all(response.status_code == 200 for response in responses))
+
     def test_email_change_requires_current_password(self):
         self.register()
 
@@ -414,6 +449,17 @@ class AuthenticationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(User.objects.get().display_name, 'New Name')
+
+    def test_email_change_uses_lowercase_normalization_not_casefold(self):
+        from accounts.serializers import ProfileSerializer
+
+        user = User.objects.create_user(
+            email='a@straße.de', password=self.password, display_name='Alex'
+        )
+        serializer = ProfileSerializer(user, data={'email': 'a@STRASSE.de'}, partial=True)
+
+        with self.assertRaises(DRFValidationError):
+            serializer.validate({'email': 'a@STRASSE.de'})
 
     def test_registration_validates_password_only_once(self):
         from django.contrib.auth.password_validation import validate_password
@@ -451,18 +497,9 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
     def setUp(self):
         super().setUp()
         mail.outbox.clear()
-        self.reset_email_jobs = []
-        self.submit_patcher = patch(
-            'accounts.services.password_reset_email_executor.submit',
-            side_effect=lambda function, *args: self.reset_email_jobs.append((function, args)),
-        )
-        self.submit_patcher.start()
-        self.addCleanup(self.submit_patcher.stop)
 
     def deliver_queued_reset_emails(self):
-        queued, self.reset_email_jobs = self.reset_email_jobs, []
-        for function, args in queued:
-            function(*args)
+        return process_password_reset_email_jobs(batch_size=10)
 
     def start_reset(self, email):
         response = self.request_json('post', '/api/auth/password-reset/', {'email': email})
@@ -489,6 +526,7 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
 
         known = self.start_reset('alex@example.com')
         unknown = self.start_reset('missing@example.com')
+        self.assertEqual(PasswordResetEmailJob.objects.count(), 1)
         self.deliver_queued_reset_emails()
 
         self.assertEqual(known.status_code, 200)
@@ -502,11 +540,11 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
         User.objects.create_user(
             email='alex@example.com', password=self.password, display_name='Alex'
         )
-        with patch('accounts.services.send_mail') as deliver:
+        with patch('accounts.services.send_mail', return_value=1) as deliver:
             response = self.start_reset('alex@example.com')
             self.assertEqual(response.status_code, 200)
             deliver.assert_not_called()
-            self.assertEqual(len(self.reset_email_jobs), 1)
+            self.assertEqual(PasswordResetEmailJob.objects.count(), 1)
             self.deliver_queued_reset_emails()
             deliver.assert_called_once()
 
@@ -533,17 +571,98 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
             email='alex@example.com', password=self.password, display_name='Alex'
         )
         self.start_reset('alex@example.com')
-        reset_link = self.reset_email_jobs[0][1][1]
-        token = parse_qs(urlparse(reset_link).query)['token'][0]
+
+        def fail_with_token(*, message, **_kwargs):
+            reset_url = re.search(r'https://app\.example/reset-password\?[^\s]+', message)
+            token = parse_qs(urlparse(reset_url.group(0)).query)['token'][0]
+            raise OSError(f'SMTP unavailable while sending token {token}')
 
         with patch(
             'accounts.services.send_mail',
-            side_effect=OSError(f'SMTP unavailable while sending token {token}'),
+            side_effect=fail_with_token,
         ), self.assertLogs('accounts.services', level='ERROR') as delivery_logs:
             self.deliver_queued_reset_emails()
 
         self.assertTrue(any('SMTP unavailable' in entry for entry in delivery_logs.output))
-        self.assertNotIn(token, '\n'.join(delivery_logs.output))
+        self.assertNotRegex('\n'.join(delivery_logs.output), r'token [\w-]+')
+        job = PasswordResetEmailJob.objects.get()
+        self.assertEqual(job.status, PasswordResetEmailJob.Status.QUEUED)
+        self.assertEqual(job.attempt_count, 1)
+
+    def test_password_reset_jobs_deduplicate_and_store_no_token(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+
+        self.start_reset('alex@example.com')
+        self.start_reset('alex@example.com')
+
+        self.assertEqual(PasswordResetEmailJob.objects.count(), 1)
+        self.assertFalse(any(
+            field.name in {'token', 'reset_token', 'link', 'reset_link'}
+            for field in PasswordResetEmailJob._meta.fields
+        ))
+
+    def test_password_reset_job_retries_after_transient_delivery_failure(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+
+        with patch('accounts.services.send_mail', side_effect=OSError('SMTP unavailable')):
+            self.assertEqual(self.deliver_queued_reset_emails(), 1)
+
+        job = PasswordResetEmailJob.objects.get()
+        self.assertEqual(job.status, PasswordResetEmailJob.Status.QUEUED)
+        self.assertEqual(job.attempt_count, 1)
+        job.available_at = timezone.now() - timedelta(seconds=1)
+        job.save(update_fields=('available_at',))
+
+        self.assertEqual(self.deliver_queued_reset_emails(), 1)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_password_reset_job_recovers_after_worker_restart(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+        PasswordResetEmailJob.objects.update(
+            status=PasswordResetEmailJob.Status.PROCESSING,
+            locked_at=timezone.now() - timedelta(minutes=10),
+        )
+
+        self.assertEqual(self.deliver_queued_reset_emails(), 1)
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_reset_email_worker_command_processes_one_batch(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+
+        call_command('send_password_reset_emails', '--once')
+
+        self.assertFalse(PasswordResetEmailJob.objects.exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(
+        FRONTEND_PASSWORD_RESET_URL='https://app.example/reset-password?lang=en&source=email'
+    )
+    def test_reset_email_merges_uid_and_token_into_existing_query(self):
+        User.objects.create_user(
+            email='alex@example.com', password=self.password, display_name='Alex'
+        )
+        self.start_reset('alex@example.com')
+        self.deliver_queued_reset_emails()
+
+        reset_url = re.search(r'https://app\.example/reset-password\?[^\s]+', mail.outbox[0].body)
+        query = parse_qs(urlparse(reset_url.group(0)).query)
+        self.assertEqual(query['lang'], ['en'])
+        self.assertEqual(query['source'], ['email'])
+        self.assertTrue(query['uid'][0])
+        self.assertTrue(query['token'][0])
 
     def test_password_reset_confirm_changes_password_and_invalidates_old_sessions(self):
         self.register()
@@ -637,3 +756,67 @@ class PasswordLifecycleApiTests(AuthenticationApiTests):
         })
         self.assertEqual(old_login.status_code, 400)
         self.assertEqual(new_login.status_code, 200)
+
+    def test_password_change_throttle_is_keyed_per_user(self):
+        first_user = User.objects.create_user(
+            email='second@example.com', password=self.password, display_name='Second'
+        )
+        self.register()
+        first_client = self.client
+        second_client = Client(enforce_csrf_checks=True)
+        second_client.force_login(first_user)
+
+        def wrong_password_response(client):
+            client.get('/api/auth/csrf/')
+            token = client.cookies['csrftoken'].value
+            return client.post(
+                '/api/auth/password-change/',
+                data=json.dumps({
+                    'current_password': 'wrong-current-password',
+                    'new_password': self.new_password,
+                }),
+                content_type='application/json',
+                HTTP_X_CSRFTOKEN=token,
+            )
+
+        first_user_responses = [wrong_password_response(first_client) for _ in range(6)]
+        second_user_response = wrong_password_response(second_client)
+
+        self.assertTrue(all(response.status_code == 400 for response in first_user_responses[:5]))
+        self.assertEqual(first_user_responses[5].status_code, 429)
+        self.assertEqual(second_user_response.status_code, 400)
+
+    def test_profile_and_password_change_share_the_user_throttle(self):
+        self.register()
+        profile_responses = [
+            self.request_json('patch', '/api/me/', {
+                'email': f'new-{index}@example.com',
+                'current_password': 'wrong-current-password',
+            })
+            for index in range(3)
+        ]
+        password_responses = [
+            self.request_json('post', '/api/auth/password-change/', {
+                'current_password': 'wrong-current-password',
+                'new_password': self.new_password,
+            })
+            for _ in range(3)
+        ]
+
+        self.assertTrue(all(response.status_code == 400 for response in profile_responses))
+        self.assertEqual([response.status_code for response in password_responses], [400, 400, 429])
+
+    def test_x_forwarded_for_cannot_bypass_ip_throttle_when_proxy_count_is_zero(self):
+        responses = []
+        for index in range(4):
+            self.client.get('/api/auth/csrf/')
+            token = self.client.cookies['csrftoken'].value
+            responses.append(self.client.post(
+                '/api/auth/password-reset/',
+                data=json.dumps({'email': 'missing@example.com'}),
+                content_type='application/json',
+                HTTP_X_CSRFTOKEN=token,
+                HTTP_X_FORWARDED_FOR=f'198.51.100.{index + 1}',
+            ))
+
+        self.assertEqual([response.status_code for response in responses], [200, 200, 200, 429])
