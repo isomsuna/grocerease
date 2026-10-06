@@ -1,4 +1,5 @@
-from django.contrib.auth import authenticate
+from asgiref.sync import sync_to_async
+from django.contrib.auth import aauthenticate, authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -10,7 +11,12 @@ from accounts.models import User
 class UserIdentityTests(TestCase):
     def test_email_is_the_unique_login_identifier(self):
         self.assertEqual(User.USERNAME_FIELD, 'email')
-        self.assertTrue(User._meta.get_field('email').unique)
+        self.assertTrue(
+            any(
+                constraint.name == 'accounts_user_email_ci_uniq'
+                for constraint in User._meta.constraints
+            )
+        )
         self.assertNotIn('username', {field.name for field in User._meta.fields})
 
     def test_user_can_be_created_with_email_without_username(self):
@@ -25,6 +31,31 @@ class UserIdentityTests(TestCase):
         self.assertTrue(user.check_password('safe-test-password'))
         self.assertEqual(
             authenticate(email='alex@example.com', password='safe-test-password'),
+            user,
+        )
+
+    def test_email_is_normalized_and_login_is_case_insensitive(self):
+        user = User.objects.create_user(
+            email='Alex@GMAIL.com',
+            password='safe-test-password',
+            display_name='Alex',
+        )
+
+        self.assertEqual(user.email, 'alex@gmail.com')
+        self.assertEqual(
+            authenticate(email='ALEX@gmail.com', password='safe-test-password'),
+            user,
+        )
+
+    async def test_async_email_login_is_case_insensitive(self):
+        user = await sync_to_async(User.objects.create_user)(
+            email='alex@example.com',
+            password='safe-test-password',
+            display_name='Alex',
+        )
+
+        self.assertEqual(
+            await aauthenticate(email='ALEX@example.com', password='safe-test-password'),
             user,
         )
 
@@ -77,6 +108,20 @@ class UserIdentityTests(TestCase):
         with self.assertRaises(IntegrityError):
             User.objects.create_user(
                 email='alex@example.com',
+                password='another-test-password',
+                display_name='Another Alex',
+            )
+
+    def test_email_uniqueness_ignores_case(self):
+        User.objects.create_user(
+            email='Alex@example.com',
+            password='safe-test-password',
+            display_name='Alex',
+        )
+
+        with self.assertRaises(IntegrityError):
+            User.objects.create_user(
+                email='alex@EXAMPLE.com',
                 password='another-test-password',
                 display_name='Another Alex',
             )

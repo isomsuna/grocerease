@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Email is the MVP login identifier and must be unique.
+- Email matching and uniqueness ignore letter case; stored email addresses are lowercase.
 - `display_name` is the canonical profile name.
 - Application time zone is `Asia/Manila`.
 - Money and other product-domain behavior remain unchanged.

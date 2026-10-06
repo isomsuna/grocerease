@@ -2,6 +2,7 @@
 
 import accounts.managers
 from django.db import migrations, models
+from django.db.models.functions import Lower
 
 
 def validate_legacy_accounts_and_backfill_display_names(apps, schema_editor):
@@ -17,12 +18,13 @@ def validate_legacy_accounts_and_backfill_display_names(apps, schema_editor):
                 'Cannot migrate accounts with a blank email. Add a valid, unique email '
                 'to every existing account, or reset this disposable development database.'
             )
-        if email in seen_emails:
+        normalized_email = email.lower()
+        if normalized_email in seen_emails:
             raise RuntimeError(
-                'Cannot migrate accounts with duplicate email addresses. Resolve duplicate '
-                'emails first, or reset this disposable development database.'
+                'Cannot migrate accounts with email addresses that differ only by case. '
+                'Resolve duplicate emails first, or reset this disposable development database.'
             )
-        seen_emails.add(email)
+        seen_emails.add(normalized_email)
 
     for user in users:
         name_parts = [
@@ -36,7 +38,7 @@ def validate_legacy_accounts_and_backfill_display_names(apps, schema_editor):
             or user.email.split('@', 1)[0]
         )
         User.objects.using(database).filter(pk=user.pk).update(
-            email=user.email.strip(),
+            email=user.email.strip().lower(),
             display_name=display_name,
         )
 
@@ -77,6 +79,13 @@ class Migration(migrations.Migration):
             model_name='user',
             name='email',
             field=models.EmailField(max_length=254, unique=True),
+        ),
+        migrations.AddConstraint(
+            model_name='user',
+            constraint=models.UniqueConstraint(
+                Lower('email'),
+                name='accounts_user_email_ci_uniq',
+            ),
         ),
         migrations.RunPython(migrations.RunPython.noop, reverse_code=None),
     ]

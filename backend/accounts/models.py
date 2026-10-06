@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models.functions import Lower
 
 from accounts.managers import UserManager
 
@@ -17,6 +18,11 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ['display_name']
 
     objects = UserManager()
+
+    class Meta(AbstractUser.Meta):
+        constraints = [
+            models.UniqueConstraint(Lower('email'), name='accounts_user_email_ci_uniq'),
+        ]
 
     def get_full_name(self):
         return self.display_name
