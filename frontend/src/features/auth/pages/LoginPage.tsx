@@ -5,19 +5,13 @@ import { Link, useLocation } from 'react-router-dom'
 import { Button } from '../../../components/ui/Button'
 import { FormAlert } from '../../../components/ui/FormAlert'
 import { TextField } from '../../../components/ui/TextField'
-import { isApiError } from '../../../lib/api/client'
-import { applyApiErrors, getApiErrorMap } from '../../../lib/api/errors'
+import { applyApiErrors } from '../../../lib/api/errors'
 import { AuthCard } from '../components/AuthCard'
 import { SessionNotEstablishedError, useLogin } from '../hooks'
 import { loginSchema, type LoginValues } from '../schemas'
 
-const INVALID_CREDENTIALS = 'Your email or password is incorrect.'
 const SESSION_NOT_STARTED =
   "You were signed in, but your browser didn't keep the session. Check that cookies are allowed and try again."
-
-function isEmpty(value: object): boolean {
-  return Object.keys(value).length === 0
-}
 
 export default function LoginPage() {
   const location = useLocation()
@@ -42,8 +36,6 @@ export default function LoginPage() {
     } catch (error) {
       if (error instanceof SessionNotEstablishedError) {
         setFormError(SESSION_NOT_STARTED)
-      } else if (isApiError(error, 401) && isEmpty(getApiErrorMap(error))) {
-        setFormError(INVALID_CREDENTIALS)
       } else {
         setFormError(applyApiErrors(error, setError, ['email', 'password']))
       }

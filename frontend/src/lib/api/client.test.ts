@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createFakeApi } from '../../test/fakeApi'
-import { ApiError, apiPost, apiRequest } from './client'
+import { ApiError, apiPost, apiRequest, resolveApiBaseUrl } from './client'
 
 describe('apiRequest CSRF handling', () => {
   it('does not send a CSRF token on safe requests', async () => {
@@ -51,5 +51,27 @@ describe('apiRequest CSRF handling', () => {
 
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({ status: 401, body: { detail: 'Not authenticated.' } })
+  })
+})
+
+describe('resolveApiBaseUrl', () => {
+  const origin = 'https://app.grocerease.test'
+
+  it('defaults to /api on the page origin', () => {
+    expect(resolveApiBaseUrl(undefined, origin)).toBe('/api')
+    expect(resolveApiBaseUrl('  ', origin)).toBe('/api')
+  })
+
+  it('accepts same-origin paths and absolute URLs', () => {
+    expect(resolveApiBaseUrl('/backend/api/', origin)).toBe('/backend/api')
+    expect(resolveApiBaseUrl('https://app.grocerease.test/api', origin)).toBe('/api')
+  })
+
+  it('rejects another origin, where session cookies would not be sent', () => {
+    expect(() => resolveApiBaseUrl('https://api.grocerease.test/api', origin)).toThrow(
+      /must be on the app's own origin/,
+    )
+    expect(() => resolveApiBaseUrl('//api.grocerease.test/api', origin)).toThrow()
+    expect(() => resolveApiBaseUrl('http://app.grocerease.test/api', origin)).toThrow()
   })
 })

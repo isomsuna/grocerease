@@ -13,7 +13,7 @@ export type FakeResponse = { status?: number; body?: unknown }
 type Handler = (call: ApiCall) => FakeResponse | Promise<FakeResponse>
 
 export const alex: CurrentUser = {
-  id: '6b1f0a4e-1c1d-4f61-9a39-7a9b6c1d2e3f',
+  id: 1,
   display_name: 'Alex',
   email: 'alex@example.com',
 }
@@ -45,7 +45,7 @@ export function createFakeApi({ signedInAs = null }: { signedInAs?: CurrentUser 
     }],
     ['POST /auth/register/', ({ body }) => {
       const { display_name, email } = body as Record<string, string>
-      sessionUser = { id: 'new-user-id', display_name, email }
+      sessionUser = { id: 2, display_name, email }
       return { status: 201, body: sessionUser }
     }],
     ['POST /auth/logout/', () => {

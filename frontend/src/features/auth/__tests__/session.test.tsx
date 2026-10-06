@@ -74,18 +74,6 @@ describe('login', () => {
     expect(screen.getByLabelText('Password')).toHaveValue('correct horse battery')
   })
 
-  it('treats a bare 401 from login as invalid credentials', async () => {
-    const api = createFakeApi()
-    api.on('POST /auth/login/', { status: 401 })
-    const { user } = renderApp('/login')
-
-    await logIn(user)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your email or password is incorrect.',
-    )
-  })
-
   it('reports a login that did not produce a session instead of entering the app', async () => {
     const api = createFakeApi()
     api.on('POST /auth/login/', { body: alex })

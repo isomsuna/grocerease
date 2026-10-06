@@ -1,4 +1,23 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+/**
+ * Resolves the API base path and rejects other origins. Auth relies on the
+ * session and CSRF cookies, which are only sent with same-origin requests and
+ * only readable from `document.cookie` on the API's own origin.
+ */
+export function resolveApiBaseUrl(configured: string | undefined, pageOrigin: string): string {
+  const url = new URL(configured?.trim() || '/api', pageOrigin)
+  if (url.origin !== pageOrigin) {
+    throw new Error(
+      `VITE_API_BASE_URL must be on the app's own origin (${pageOrigin}), but it points to ${url.origin}. ` +
+        'Serve the API from the same origin or proxy it, for example under /api.',
+    )
+  }
+  return url.pathname.replace(/\/+$/, '')
+}
+
+const API_BASE_URL = resolveApiBaseUrl(
+  import.meta.env.VITE_API_BASE_URL,
+  window.location.origin,
+)
 
 const CSRF_COOKIE_NAME = 'csrftoken'
 const CSRF_HEADER_NAME = 'X-CSRFToken'

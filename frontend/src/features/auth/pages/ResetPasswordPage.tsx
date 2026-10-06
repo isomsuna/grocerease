@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Button } from '../../../components/ui/Button'
 import { FormAlert } from '../../../components/ui/FormAlert'
 import { TextField } from '../../../components/ui/TextField'
@@ -9,6 +9,7 @@ import { isApiError } from '../../../lib/api/client'
 import { applyApiErrors, getApiErrorMap } from '../../../lib/api/errors'
 import { AuthCard } from '../components/AuthCard'
 import { useConfirmPasswordReset } from '../hooks'
+import { clearStoredResetLink, useResetLink } from '../resetLink'
 import { resetPasswordSchema, type ResetPasswordValues } from '../schemas'
 
 const invalidLinkMessage = (
@@ -19,9 +20,7 @@ const invalidLinkMessage = (
 )
 
 export default function ResetPasswordPage() {
-  const [searchParams] = useSearchParams()
-  const uid = searchParams.get('uid')
-  const token = searchParams.get('token')
+  const resetLink = useResetLink()
   const confirmReset = useConfirmPasswordReset()
   const [formError, setFormError] = useState<ReactNode>(null)
   const [isComplete, setIsComplete] = useState(false)
@@ -35,7 +34,7 @@ export default function ResetPasswordPage() {
     defaultValues: { password: '', confirm_password: '' },
   })
 
-  if (!uid || !token) {
+  if (!resetLink) {
     return (
       <AuthCard title="Reset link not valid">
         <FormAlert>{invalidLinkMessage}</FormAlert>
@@ -59,7 +58,8 @@ export default function ResetPasswordPage() {
   const onSubmit = handleSubmit(async ({ password }) => {
     setFormError(null)
     try {
-      await confirmReset.mutateAsync({ uid, token, new_password: password })
+      await confirmReset.mutateAsync({ ...resetLink, new_password: password })
+      clearStoredResetLink()
       setIsComplete(true)
     } catch (error) {
       // The API rejects a bad link as a uid/token field error or, once the
@@ -70,6 +70,7 @@ export default function ResetPasswordPage() {
         'token' in errorMap ||
         (isApiError(error, 400) && 'non_field_errors' in errorMap && !('new_password' in errorMap))
       if (isBadLink) {
+        clearStoredResetLink()
         setFormError(invalidLinkMessage)
         return
       }

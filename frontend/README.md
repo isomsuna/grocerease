@@ -11,7 +11,10 @@ npm run dev
 ```
 
 Set `VITE_API_BASE_URL` to override the default `/api` base URL for backend
-requests.
+requests. It must stay on the app's own origin, either as a path such as
+`/api` or as a URL on the same origin. Authentication depends on same-origin
+session and CSRF cookies, so the client refuses to start with an API on
+another origin. Serve the API from the same origin, or proxy it.
 
 ## Testing
 
@@ -38,8 +41,10 @@ for authorization.
   returns to the page they asked for.
 - Logout clears the TanStack Query cache before showing `/login`.
 - Password-reset emails link to `/reset-password?uid=<uid>&token=<token>`. The
-  page posts `{ uid, token, new_password }` to
-  `/api/auth/password-reset/confirm/`.
+  page moves `uid` and `token` into this tab's `sessionStorage`, removes them
+  from the address bar, and posts `{ uid, token, new_password }` to
+  `/api/auth/password-reset/confirm/`. The stored link is cleared after a
+  successful reset or a rejected link.
 
 ## Project specifications
 

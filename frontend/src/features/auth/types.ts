@@ -1,5 +1,5 @@
 export type CurrentUser = {
-  id: string
+  id: number
   display_name: string
   email: string
 }

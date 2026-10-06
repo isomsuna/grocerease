@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { alex, createFakeApi } from '../../../test/fakeApi'
 import { renderApp } from '../../../test/renderApp'
@@ -74,6 +74,59 @@ describe('reset password', () => {
 
     expect(await screen.findByText("Passwords don't match.")).toBeInTheDocument()
     expect(api.requests('POST /auth/password-reset/confirm/')).toHaveLength(0)
+  })
+
+  it('removes the uid and token from the address bar but still uses them', async () => {
+    const api = createFakeApi()
+    const { location, router, user } = renderApp(RESET_PATH)
+
+    await waitFor(() => expect(location()).toBe('/reset-password'))
+    expect(router.state.historyAction).toBe('REPLACE')
+
+    await user.type(screen.getByLabelText('New password'), 'correct horse battery')
+    await user.type(screen.getByLabelText('Confirm new password'), 'correct horse battery')
+    await user.click(screen.getByRole('button', { name: 'Reset password' }))
+
+    await screen.findByRole('status')
+    expect(api.requests('POST /auth/password-reset/confirm/')[0].body).toMatchObject({
+      uid: 'MQ',
+      token: 'c3x0-abc123',
+    })
+  })
+
+  it('keeps the link for a reload of this tab and forgets it after the reset', async () => {
+    const api = createFakeApi()
+    const first = renderApp(RESET_PATH)
+    await waitFor(() => expect(first.location()).toBe('/reset-password'))
+    cleanup()
+
+    const { user } = renderApp('/reset-password')
+    await user.type(await screen.findByLabelText('New password'), 'correct horse battery')
+    await user.type(screen.getByLabelText('Confirm new password'), 'correct horse battery')
+    await user.click(screen.getByRole('button', { name: 'Reset password' }))
+
+    await screen.findByRole('status')
+    expect(api.requests('POST /auth/password-reset/confirm/')[0].body).toMatchObject({
+      uid: 'MQ',
+      token: 'c3x0-abc123',
+    })
+    expect(sessionStorage.length).toBe(0)
+    cleanup()
+
+    renderApp('/reset-password')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This reset link is invalid or has expired.',
+    )
+  })
+
+  it('shows the invalid-link message when the page opens without a link', async () => {
+    createFakeApi()
+    renderApp('/reset-password')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This reset link is invalid or has expired.',
+    )
+    expect(screen.queryByLabelText('New password')).not.toBeInTheDocument()
   })
 
   it('submits the uid, token, and new password, then points to login', async () => {
